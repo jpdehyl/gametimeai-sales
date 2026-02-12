@@ -1,25 +1,37 @@
 // ============================================================
-// Outreach Composer Page — AI email generation (US-003)
+// Outreach Composer Page — AI email generation for deal stakeholders
 // ============================================================
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { fetchLeads, generateOutreach, type OutreachResult, type LeadSummary } from '@/lib/api';
+import {
+  fetchDeals,
+  fetchDealDetail,
+  generateOutreach,
+  type OutreachResult,
+  type DealSummary,
+  type Stakeholder,
+} from '@/lib/api';
 import {
   Mail,
   Send,
   Sparkles,
   Copy,
   CheckCircle,
-  ChevronDown,
+  Users,
+  Target,
+  AlertTriangle,
+  MessageSquare,
 } from 'lucide-react';
-import { cn, getScoreBgColor } from '@/lib/utils';
+import { cn, formatCurrency, getHealthScoreColor } from '@/lib/utils';
 
 const SEQUENCE_TYPES = [
   { value: 'cold_intro', label: 'Cold Introduction' },
   { value: 'follow_up', label: 'Follow Up' },
   { value: 're_engagement', label: 'Re-engagement' },
   { value: 'event_triggered', label: 'Event Triggered' },
+  { value: 'proposal_follow_up', label: 'Proposal Follow-Up' },
+  { value: 'multi_thread', label: 'Multi-Thread Outreach' },
 ];
 
 const TONES = [
@@ -27,27 +39,54 @@ const TONES = [
   { value: 'professional_formal', label: 'Professional Formal' },
   { value: 'friendly', label: 'Friendly' },
   { value: 'direct', label: 'Direct' },
+  { value: 'executive', label: 'Executive Briefing' },
 ];
 
 export default function OutreachPage() {
-  const [selectedLeadId, setSelectedLeadId] = useState('');
-  const [sequenceType, setSequenceType] = useState('cold_intro');
+  const [selectedDealId, setSelectedDealId] = useState('');
+  const [selectedStakeholderId, setSelectedStakeholderId] = useState('');
+  const [sequenceType, setSequenceType] = useState('follow_up');
   const [tone, setTone] = useState('professional_casual');
   const [variants, setVariants] = useState(3);
   const [result, setResult] = useState<OutreachResult | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  const { data: leadsData } = useQuery({
-    queryKey: ['leads', { page: 1, pageSize: 50 }],
-    queryFn: () => fetchLeads({ pageSize: 50 }),
+  // Fetch all deals for the deal selector
+  const { data: dealsData } = useQuery({
+    queryKey: ['deals'],
+    queryFn: () => fetchDeals(),
   });
 
-  const leads = leadsData?.data || [];
+  const deals = dealsData?.data || [];
+
+  // Fetch deal detail to get stakeholders when a deal is selected
+  const { data: dealDetailData } = useQuery({
+    queryKey: ['deal', selectedDealId],
+    queryFn: () => fetchDealDetail(selectedDealId),
+    enabled: !!selectedDealId,
+  });
+
+  const dealDetail = dealDetailData?.data;
+  const stakeholders = dealDetail?.stakeholders || [];
+
+  // Find the selected stakeholder for the context sidebar
+  const selectedStakeholder = useMemo(
+    () => stakeholders.find((s) => s.id === selectedStakeholderId),
+    [stakeholders, selectedStakeholderId]
+  );
+
+  // Reset stakeholder when deal changes
+  const handleDealChange = (dealId: string) => {
+    setSelectedDealId(dealId);
+    setSelectedStakeholderId('');
+    setResult(null);
+  };
 
   const mutation = useMutation({
     mutationFn: () =>
       generateOutreach({
-        leadId: selectedLeadId,
+        dealId: selectedDealId,
+        stakeholderId: selectedStakeholderId || undefined,
         sequenceType,
         variants,
         tone,
@@ -74,19 +113,45 @@ export default function OutreachPage() {
               </h3>
             </div>
             <div className="card-body space-y-4">
-              {/* Lead selector */}
+              {/* Deal selector */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Select Lead</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Select Deal</label>
                 <select
-                  value={selectedLeadId}
-                  onChange={(e) => setSelectedLeadId(e.target.value)}
+                  value={selectedDealId}
+                  onChange={(e) => handleDealChange(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white
                              focus:outline-none focus:ring-2 focus:ring-primary-500"
                 >
-                  <option value="">Choose a lead...</option>
-                  {leads.map((lead) => (
-                    <option key={lead.id} value={lead.id}>
-                      {lead.displayName} ({lead.company}) — Score: {lead.aiScore}
+                  <option value="">Choose a deal...</option>
+                  {deals.map((deal) => (
+                    <option key={deal.id} value={deal.id}>
+                      {deal.name} ({deal.accountName}) -- {formatCurrency(deal.amount)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Stakeholder selector */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Select Stakeholder</label>
+                <select
+                  value={selectedStakeholderId}
+                  onChange={(e) => setSelectedStakeholderId(e.target.value)}
+                  disabled={!selectedDealId || stakeholders.length === 0}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white
+                             focus:outline-none focus:ring-2 focus:ring-primary-500
+                             disabled:bg-gray-50 disabled:text-gray-400"
+                >
+                  <option value="">
+                    {!selectedDealId
+                      ? 'Select a deal first...'
+                      : stakeholders.length === 0
+                      ? 'No stakeholders on this deal'
+                      : 'Choose a stakeholder...'}
+                  </option>
+                  {stakeholders.map((sh) => (
+                    <option key={sh.id} value={sh.id}>
+                      {sh.name} -- {sh.title} ({sh.role?.replace(/_/g, ' ')})
                     </option>
                   ))}
                 </select>
@@ -139,7 +204,7 @@ export default function OutreachPage() {
 
               <button
                 onClick={() => mutation.mutate()}
-                disabled={!selectedLeadId || mutation.isPending}
+                disabled={!selectedDealId || mutation.isPending}
                 className="btn-primary w-full justify-center"
               >
                 {mutation.isPending ? (
@@ -151,9 +216,14 @@ export default function OutreachPage() {
             </div>
           </div>
 
-          {/* Selected lead context */}
-          {selectedLeadId && (
-            <SelectedLeadCard lead={leads.find((l) => l.id === selectedLeadId)} />
+          {/* Stakeholder context sidebar */}
+          {selectedStakeholder && (
+            <StakeholderContextCard stakeholder={selectedStakeholder} />
+          )}
+
+          {/* Deal context card */}
+          {selectedDealId && dealDetail && (
+            <DealContextCard deal={dealDetail} />
           )}
         </div>
 
@@ -213,8 +283,8 @@ export default function OutreachPage() {
               <Mail className="w-12 h-12 text-gray-300 mb-4" />
               <h3 className="text-lg font-semibold text-gray-700">No outreach generated yet</h3>
               <p className="text-sm text-gray-500 mt-1 max-w-md">
-                Select a lead and click &ldquo;Generate Outreach&rdquo; to create personalized email
-                variants powered by AI.
+                Select a deal and stakeholder, then click &ldquo;Generate Outreach&rdquo; to create
+                personalized email variants powered by AI with full deal context.
               </p>
             </div>
           )}
@@ -224,32 +294,132 @@ export default function OutreachPage() {
   );
 }
 
-function SelectedLeadCard({ lead }: { lead?: LeadSummary }) {
-  if (!lead) return null;
+function StakeholderContextCard({ stakeholder }: { stakeholder: Stakeholder }) {
+  const sentimentColor =
+    stakeholder.sentiment === 'positive'
+      ? 'text-green-600'
+      : stakeholder.sentiment === 'negative'
+      ? 'text-red-600'
+      : 'text-gray-600';
 
   return (
     <div className="card">
       <div className="card-header">
-        <h4 className="text-sm font-medium text-gray-500">Selected Lead</h4>
+        <h4 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+          <Users className="w-4 h-4 text-primary-500" />
+          Stakeholder Context
+        </h4>
       </div>
-      <div className="card-body space-y-2">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-gray-900">{lead.displayName}</p>
-          <span className={cn('score-badge text-xs', getScoreBgColor(lead.aiScore))}>
-            {lead.aiScore}
-          </span>
+      <div className="card-body space-y-3">
+        <div>
+          <p className="text-sm font-semibold text-gray-900">{stakeholder.name}</p>
+          <p className="text-xs text-gray-500">{stakeholder.title}</p>
         </div>
-        <p className="text-xs text-gray-500">{lead.title} at {lead.company}</p>
-        {lead.industry && <p className="text-xs text-gray-400">{lead.industry}</p>}
-        {lead.scoreFactors.length > 0 && (
-          <div className="pt-2 border-t border-gray-100 space-y-1">
-            {lead.scoreFactors.map((f, i) => (
-              <p key={i} className="text-xs text-gray-500 flex items-start gap-1">
-                <span className="text-primary-400">&#x2022;</span> {f}
-              </p>
-            ))}
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <p className="text-xs text-gray-400 uppercase">Role</p>
+            <p className="text-xs font-medium text-gray-700">
+              {stakeholder.role?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 uppercase">Sentiment</p>
+            <p className={cn('text-xs font-medium capitalize', sentimentColor)}>
+              {stakeholder.sentiment}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 uppercase">Influence</p>
+            <p className="text-xs font-medium text-gray-700 capitalize">{stakeholder.influence}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 uppercase">Engagement</p>
+            <p className="text-xs font-medium text-gray-700 capitalize">{stakeholder.engagementLevel}</p>
+          </div>
+        </div>
+
+        {stakeholder.priorities && stakeholder.priorities.length > 0 && (
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs text-gray-400 uppercase mb-1 flex items-center gap-1">
+              <Target className="w-3 h-3" /> Priorities
+            </p>
+            <ul className="space-y-1">
+              {stakeholder.priorities.map((p, i) => (
+                <li key={i} className="text-xs text-gray-600 flex items-start gap-1">
+                  <span className="text-primary-400 mt-0.5">&#x2022;</span> {p}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
+
+        {stakeholder.concerns && stakeholder.concerns.length > 0 && (
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs text-gray-400 uppercase mb-1 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" /> Concerns
+            </p>
+            <ul className="space-y-1">
+              {stakeholder.concerns.map((c, i) => (
+                <li key={i} className="text-xs text-gray-600 flex items-start gap-1">
+                  <span className="text-orange-400 mt-0.5">&#x2022;</span> {c}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {stakeholder.background && (
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs text-gray-400 uppercase mb-1">
+              <MessageSquare className="w-3 h-3 inline mr-1" />
+              Background
+            </p>
+            <p className="text-xs text-gray-600">{stakeholder.background}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DealContextCard({ deal }: { deal: any }) {
+  const health = getHealthScoreColor(deal.healthScore || 0);
+  const stageLabel = deal.stage
+    ?.replace(/_/g, ' ')
+    .replace(/\b\w/g, (c: string) => c.toUpperCase());
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <h4 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+          <Target className="w-4 h-4 text-blue-500" />
+          Deal Context
+        </h4>
+      </div>
+      <div className="card-body space-y-2">
+        <p className="text-sm font-semibold text-gray-900">{deal.name}</p>
+        <p className="text-xs text-gray-500">{deal.accountName || deal.account?.name}</p>
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <div>
+            <p className="text-xs text-gray-400">Stage</p>
+            <p className="text-xs font-medium text-gray-700">{stageLabel}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400">Amount</p>
+            <p className="text-xs font-medium text-gray-700">{formatCurrency(deal.amount || 0)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400">Health</p>
+            <p className={cn('text-xs font-medium', health.text)}>{deal.healthScore}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400">Stakeholders</p>
+            <p className="text-xs font-medium text-gray-700">
+              {deal.stakeholders?.length || deal.stakeholderCount || 0}
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -1,96 +1,143 @@
 // ============================================================
-// Outreach Routes — US-003
-// POST /api/v1/outreach/generate — Generate AI outreach emails
-// GET /api/v1/outreach/sequences — List outreach sequences
-// GET /api/v1/outreach/sequences/:id — Get sequence detail
+// Outreach Routes — AE Deal Intelligence Platform
+// POST /api/v1/outreach/generate — Generate emails for a stakeholder on a deal
+// POST /api/v1/deals/:id/meeting-prep — Generate meeting prep for a deal
 // ============================================================
 
 import { Router, Request, Response } from 'express';
 import { store } from '../store';
 import { aiService } from '../services/ai.service';
-import { OutreachSequence } from '../types';
-import { v4 as uuid } from 'uuid';
 import { logger } from '../utils/logger';
 
 const router = Router();
 
 /**
+ * Derive an engagement level label from contactFrequency.
+ */
+function deriveEngagementLevel(freq: string): 'high' | 'medium' | 'low' {
+  switch (freq) {
+    case 'weekly':
+      return 'high';
+    case 'biweekly':
+      return 'high';
+    case 'monthly':
+      return 'medium';
+    case 'quarterly':
+      return 'low';
+    case 'never':
+      return 'low';
+    default:
+      return 'medium';
+  }
+}
+
+/**
  * POST /api/v1/outreach/generate
- * Generate AI-powered outreach emails for a lead. (US-003)
- * Per PRD Section 6: API Contracts
+ * Generate AI-powered outreach emails for a stakeholder on a specific deal.
+ * AE-focused: requires dealId and stakeholderId instead of generic leadId.
  */
 router.post('/generate', async (req: Request, res: Response) => {
-  const { leadId, sequenceType, variants = 3, tone = 'professional_casual' } = req.body;
+  const {
+    dealId,
+    stakeholderId,
+    emailType = 'follow_up',
+    variants = 3,
+    tone = 'professional_casual',
+    context,
+  } = req.body;
 
-  if (!leadId) {
+  if (!dealId) {
     return res.status(400).json({
       error: 'VALIDATION_ERROR',
-      message: 'leadId is required',
+      message: 'dealId is required',
       statusCode: 400,
     });
   }
 
-  const lead = store.getLeadById(leadId);
-  if (!lead) {
+  if (!stakeholderId) {
+    return res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'stakeholderId is required',
+      statusCode: 400,
+    });
+  }
+
+  const deal = store.getDealById(dealId);
+  if (!deal) {
     return res.status(404).json({
       error: 'NOT_FOUND',
-      message: `Lead ${leadId} not found`,
+      message: `Deal ${dealId} not found`,
       statusCode: 404,
     });
   }
 
-  // Check if lead has enrichment data (US-003 AC: edge case)
-  const hasEnrichment = lead.companyIntel.summary && lead.companyIntel.summary.length > 0;
+  const stakeholders = store.getStakeholdersForDeal(dealId);
+  const stakeholder = stakeholders.find((s) => s.id === stakeholderId);
+
+  if (!stakeholder) {
+    return res.status(404).json({
+      error: 'NOT_FOUND',
+      message: `Stakeholder ${stakeholderId} not found on deal ${dealId}`,
+      statusCode: 404,
+    });
+  }
+
+  const account = store.getAccountById(deal.accountId);
+  const activities = store.getActivitiesForDeal(dealId);
 
   try {
+    // Build rich context for AI generation
+    const generationContext = {
+      deal: {
+        name: deal.name,
+        stage: deal.stage,
+        value: deal.value,
+        competitors: deal.competitors,
+        meddic: deal.meddic,
+      },
+      stakeholder: {
+        name: stakeholder.name,
+        title: stakeholder.title,
+        roles: stakeholder.roles.join(', '),
+        sentiment: stakeholder.sentiment,
+        engagementLevel: deriveEngagementLevel(stakeholder.contactFrequency),
+      },
+      account: account
+        ? {
+            name: account.name,
+            industry: account.industry,
+            techStack: account.techStack,
+            recentNews: account.recentNews,
+          }
+        : null,
+      recentActivities: activities.slice(0, 5),
+      additionalContext: context || '',
+    };
+
     const emailVariants = await aiService.generateOutreach(
-      lead,
-      sequenceType || 'cold_intro',
+      generationContext,
+      emailType,
       Math.min(variants, 5),
       tone
     );
 
-    // Create a sequence record
-    const sequence: OutreachSequence = {
-      id: `gt_seq_${uuid().substring(0, 8)}`,
-      leadId: lead.id,
-      sdrId: 'user_demo_001', // In production, from auth context
-      steps: emailVariants.map((variant, i) => ({
-        stepNumber: i + 1,
-        channel: 'email' as const,
-        delayDays: i * 3, // 3-day intervals
-        subject: variant.subject,
-        body: variant.body,
-        status: 'pending' as const,
-      })),
-      status: 'draft',
-      generatedBy: 'ai',
-      personalizationContext: hasEnrichment
-        ? `Company: ${lead.company}, Industry: ${lead.industry}, Signals: ${lead.buyingSignals.length}`
-        : 'Limited data — generic template with personalization prompts',
-      emailsSent: 0,
-      emailsOpened: 0,
-      replies: 0,
-      meetingsBooked: 0,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    store.sequences.set(sequence.id, sequence);
-    const leadSequences = store.sequencesByLeadId.get(lead.id) || [];
-    leadSequences.push(sequence.id);
-    store.sequencesByLeadId.set(lead.id, leadSequences);
-
     res.json({
       data: {
-        sequenceId: sequence.id,
+        dealId: deal.id,
+        dealName: deal.name,
+        stakeholderId: stakeholder.id,
+        stakeholderName: stakeholder.name,
+        emailType,
         variants: emailVariants,
-        hasEnrichment,
-        personalizationContext: sequence.personalizationContext,
+        generationContext: {
+          dealStage: deal.stage,
+          stakeholderRoles: stakeholder.roles.join(', '),
+          accountIndustry: account?.industry || 'Unknown',
+        },
       },
     });
   } catch (error) {
-    logger.error('Outreach generation failed', { error, leadId });
+    logger.error('Outreach generation failed', { error, dealId, stakeholderId });
     res.status(500).json({
       error: 'GENERATION_FAILED',
       message: 'Failed to generate outreach. Please try again.',
@@ -100,58 +147,155 @@ router.post('/generate', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/v1/outreach/sequences
- * List outreach sequences for the current user.
+ * POST /api/v1/deals/:id/meeting-prep
+ * Generate AI-powered meeting preparation for a deal.
+ * Includes: stakeholder briefing, talking points, objection handling,
+ * competitive positioning, and recommended agenda.
  */
-router.get('/sequences', (req: Request, res: Response) => {
-  const leadId = req.query.leadId as string;
-  let sequences = Array.from(store.sequences.values());
+router.post('/deals/:id/meeting-prep', (req: Request<{ id: string }>, res: Response) => {
+  const deal = store.getDealById(req.params.id);
 
-  if (leadId) {
-    sequences = sequences.filter((s) => s.leadId === leadId);
-  }
-
-  sequences.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-
-  res.json({
-    data: sequences.map((seq) => ({
-      id: seq.id,
-      leadId: seq.leadId,
-      leadName: store.getLeadById(seq.leadId)?.displayName || 'Unknown',
-      status: seq.status,
-      steps: seq.steps.length,
-      generatedBy: seq.generatedBy,
-      emailsSent: seq.emailsSent,
-      replies: seq.replies,
-      meetingsBooked: seq.meetingsBooked,
-      createdAt: seq.createdAt,
-    })),
-  });
-});
-
-/**
- * GET /api/v1/outreach/sequences/:id
- * Get full sequence detail.
- */
-router.get('/sequences/:id', (req: Request<{ id: string }>, res: Response) => {
-  const sequence = store.sequences.get(req.params.id);
-
-  if (!sequence) {
+  if (!deal) {
     return res.status(404).json({
       error: 'NOT_FOUND',
-      message: `Sequence ${req.params.id} not found`,
+      message: `Deal ${req.params.id} not found`,
       statusCode: 404,
     });
   }
 
-  const lead = store.getLeadById(sequence.leadId);
+  const { meetingType = 'general', attendeeIds } = req.body;
+
+  const account = store.getAccountById(deal.accountId);
+  const accountName = account?.name || 'Unknown';
+  const allStakeholders = store.getStakeholdersForDeal(deal.id);
+  const activities = store.getActivitiesForDeal(deal.id);
+
+  // Filter to specific attendees if provided
+  const attendees = attendeeIds && attendeeIds.length > 0
+    ? allStakeholders.filter((s) => attendeeIds.includes(s.id))
+    : allStakeholders;
+
+  // Build stakeholder briefings
+  const stakeholderBriefings = attendees.map((s) => {
+    const engagement = deriveEngagementLevel(s.contactFrequency);
+    const primaryRole = s.roles[0] || 'unknown';
+    return {
+      id: s.id,
+      name: s.name,
+      title: s.title,
+      roles: s.roles,
+      sentiment: s.sentiment,
+      engagementLevel: engagement,
+      lastContactedAt: s.lastContactedAt,
+      talkingPoints: [
+        `${s.name} is the ${primaryRole} — tailor messaging to their priorities`,
+        s.sentiment === 'opposed' || s.sentiment === 'skeptical'
+          ? `Sentiment is ${s.sentiment} — address concerns proactively`
+          : s.sentiment === 'strong_advocate' || s.sentiment === 'supportive'
+          ? `Sentiment is ${s.sentiment} — leverage as internal champion`
+          : `Sentiment is neutral — focus on building rapport and demonstrating value`,
+        engagement === 'low'
+          ? `Low engagement — prepare re-engagement strategy`
+          : `Engaged — maintain momentum with next-step commitment`,
+      ],
+    };
+  });
+
+  // Competitive positioning — deal.competitors is CompetitorIntel[]
+  const competitors = deal.competitors || [];
+  const competitorNames = competitors.map((c) => c.competitorName);
+  const ourStrengths = competitors.flatMap((c) => c.ourAdvantages);
+  const landmines = competitors.flatMap((c) => c.weaknesses);
+
+  // Build objection handling based on MEDDIC gaps (scores below 5)
+  const meddic = deal.meddic;
+  const meddicGaps: string[] = [];
+  if (meddic.metrics.score < 5) meddicGaps.push('Metrics: No quantified business impact identified yet — probe for ROI data');
+  if (meddic.economicBuyer.score < 5) meddicGaps.push('Economic Buyer: Not identified — ask who controls budget');
+  if (meddic.decisionCriteria.score < 5) meddicGaps.push('Decision Criteria: Unclear — understand evaluation framework');
+  if (meddic.decisionProcess.score < 5) meddicGaps.push('Decision Process: Unknown — map the approval workflow');
+  if (meddic.identifyPain.score < 5) meddicGaps.push('Pain: Not validated — confirm business pain points');
+  if (meddic.champion.score < 5) meddicGaps.push('Champion: No internal champion identified — cultivate one');
+
+  // Risk-based recommendations — riskFactors is RiskFactor[] (objects with .description)
+  const riskFactors = deal.riskFactors || [];
+  const riskMitigations = riskFactors.map((risk) => ({
+    risk: risk.description,
+    severity: risk.severity,
+    mitigation: risk.mitigationAction || `Address "${risk.description}" directly in the meeting — prepare supporting evidence`,
+  }));
+
+  // Suggested agenda based on meeting type
+  const agendaTemplates: Record<string, string[]> = {
+    discovery: [
+      'Introductions and rapport building (5 min)',
+      'Understand current state and pain points (15 min)',
+      'Explore desired future state and business impact (10 min)',
+      'Qualify budget, timeline, and decision process (10 min)',
+      'Align on next steps and demo scheduling (5 min)',
+    ],
+    demo: [
+      'Recap of requirements from discovery (5 min)',
+      'Live product demonstration aligned to pain points (20 min)',
+      'Q&A and technical deep-dive (10 min)',
+      'Discuss implementation timeline and resources (5 min)',
+      'Agree on evaluation criteria and next steps (5 min)',
+    ],
+    negotiation: [
+      'Review proposal and pricing structure (10 min)',
+      'Address outstanding concerns or objections (10 min)',
+      'Discuss contract terms and implementation plan (10 min)',
+      'Align on decision timeline and stakeholder sign-off (10 min)',
+      'Confirm commitment and next steps (5 min)',
+    ],
+    general: [
+      'Opening and relationship check-in (5 min)',
+      'Review progress since last meeting (10 min)',
+      'Address open items and blockers (15 min)',
+      'Discuss priorities and timeline (10 min)',
+      'Confirm next steps and action items (5 min)',
+    ],
+  };
+
+  const suggestedAgenda = agendaTemplates[meetingType] || agendaTemplates.general;
 
   res.json({
     data: {
-      ...sequence,
-      lead: lead
-        ? { id: lead.id, displayName: lead.displayName, company: lead.company }
-        : null,
+      dealId: deal.id,
+      dealName: deal.name,
+      accountName,
+      meetingType,
+      currentStage: deal.stage,
+      dealValue: deal.value,
+      healthScore: deal.healthScore,
+      stakeholderBriefings,
+      suggestedAgenda,
+      talkingPoints: [
+        `Deal is in ${deal.stage} stage — focus on advancing to next stage`,
+        deal.healthScore < 60
+          ? `Deal health is at ${deal.healthScore}% — prioritize risk mitigation`
+          : `Deal health is strong at ${deal.healthScore}% — maintain momentum`,
+        ...meddicGaps.slice(0, 3),
+      ],
+      competitivePositioning: {
+        competitors: competitorNames,
+        strengths: ourStrengths,
+        landmines,
+        differentiation: ourStrengths.length > 0
+          ? `Lead with: ${ourStrengths[0]}`
+          : 'Prepare competitive differentiation talking points',
+      },
+      meddicScorecard: {
+        ...meddic,
+        gaps: meddicGaps,
+      },
+      riskMitigations,
+      recentActivity: activities.slice(0, 5).map((a) => ({
+        type: a.type,
+        summary: a.summary,
+        occurredAt: a.occurredAt,
+      })),
+      preparedAt: new Date().toISOString(),
     },
   });
 });

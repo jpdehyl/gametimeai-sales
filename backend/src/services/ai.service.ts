@@ -5,7 +5,7 @@
 
 import { config } from '../config';
 import { logger } from '../utils/logger';
-import { GTLead, EmailVariant, CallIntelligence, CompanyIntel } from '../types';
+import { Deal, Account, Activity } from '../types';
 
 // HawkRidge product catalog context for AI prompts
 const HAWKRIDGE_CONTEXT = `
@@ -31,161 +31,67 @@ Key Differentiators:
 - Training programs and certification paths
 `;
 
+/** Shape returned by generateOutreach */
+export interface EmailVariant {
+  subject: string;
+  body: string;
+  personalizationPoints: string[];
+}
+
 export class AIService {
   /**
-   * Generate company intelligence for a lead.
+   * Enrich a deal with AI-generated intelligence.
    * In production, this would call Claude API with web search results.
-   * For PoC, returns structured enrichment data.
+   * For PoC, returns structured mock enrichment data.
    */
-  async enrichLead(lead: Partial<GTLead>): Promise<CompanyIntel> {
-    logger.info(`Enriching lead: ${lead.displayName} at ${lead.company}`);
+  async enrichDeal(deal: Partial<Deal>): Promise<{ summary: string; insights: string[] }> {
+    logger.info(`Enriching deal: ${deal.name}`);
 
     const prompt = `You are a sales intelligence AI for HawkRidge Systems (a SolidWorks reseller).
-Research and provide intelligence on the following company and contact:
+Research and provide intelligence on the following deal:
 
-Company: ${lead.company}
-Contact: ${lead.displayName}, ${lead.title}
-Email Domain: ${lead.email?.split('@')[1] || 'unknown'}
-Industry: ${lead.industry || 'unknown'}
-Website: ${lead.website || 'unknown'}
+Deal: ${deal.name}
+Stage: ${deal.stage || 'unknown'}
+Value: ${deal.value || 'unknown'}
+
+${HAWKRIDGE_CONTEXT}
 
 Provide a JSON response with:
 {
-  "summary": "2-3 sentence company overview relevant to selling engineering software",
-  "recentNews": ["array of 2-3 recent news items about this company"],
-  "techStack": ["known engineering/design tools they use"],
-  "estimatedRevenue": "revenue range estimate",
-  "employeeCount": estimated_number
+  "summary": "2-3 sentence deal intelligence overview",
+  "insights": ["array of 2-3 actionable insights for the AE"]
 }`;
 
     try {
       const result = await this.callLLM(prompt);
       return JSON.parse(result);
     } catch (error) {
-      logger.warn('AI enrichment failed, returning partial data', { error });
+      logger.warn('AI deal enrichment failed, returning placeholder', { error });
       return {
-        summary: `${lead.company} operates in the ${lead.industry || 'engineering'} sector.`,
-        recentNews: [],
-        techStack: [],
+        summary: `${deal.name || 'Deal'} is in the ${deal.stage || 'active'} stage.`,
+        insights: ['Review recent stakeholder engagement', 'Update competitive positioning'],
       };
     }
   }
 
   /**
-   * Score a lead based on available data. (US-002)
-   * Rule-based for PoC, transitioning to ML after 500+ data points.
-   */
-  scoreLead(lead: GTLead): { score: number; factors: string[] } {
-    let score = 50; // Base score
-    const factors: string[] = [];
-
-    // Title-based scoring
-    const titleWeight = this.getTitleWeight(lead.title);
-    score += titleWeight.points;
-    if (titleWeight.points > 0) factors.push(titleWeight.reason);
-
-    // Buying signals boost
-    for (const signal of lead.buyingSignals) {
-      score += signal.impactScore;
-      factors.push(`${signal.type.replace('_', ' ')}: ${signal.description.substring(0, 80)}`);
-    }
-
-    // Company intel scoring
-    if (lead.companyIntel.techStack.some((t) =>
-      ['solidworks', 'autocad', 'catia', 'inventor', 'fusion 360'].includes(t.toLowerCase())
-    )) {
-      score += 10;
-      factors.push('Tech stack match: existing CAD/CAE user');
-    }
-
-    if (lead.companyIntel.employeeCount && lead.companyIntel.employeeCount > 100) {
-      score += 5;
-      factors.push(`Company size: ${lead.companyIntel.employeeCount} employees`);
-    }
-
-    // Engagement scoring
-    if (lead.contactAttempts > 0 && lead.status === 'engaged') {
-      score += 10;
-      factors.push('Active engagement — has responded to outreach');
-    }
-
-    // Decay for unresponsive leads
-    if (lead.contactAttempts >= 3 && lead.status !== 'engaged' && lead.status !== 'qualified') {
-      score -= 15;
-      factors.push('Cooling down — 3+ contact attempts with no response');
-    }
-
-    // Recency of last activity
-    if (lead.lastActivity) {
-      const daysSinceActivity = (Date.now() - new Date(lead.lastActivity).getTime()) / (1000 * 60 * 60 * 24);
-      if (daysSinceActivity < 7) {
-        score += 5;
-      } else if (daysSinceActivity > 30) {
-        score -= 10;
-        factors.push('Stale — no activity in 30+ days');
-      }
-    }
-
-    // Clamp to 0-100
-    score = Math.max(0, Math.min(100, score));
-
-    // Return top 3 factors
-    return {
-      score,
-      factors: factors.slice(0, 3),
-    };
-  }
-
-  private getTitleWeight(title: string): { points: number; reason: string } {
-    const lower = title.toLowerCase();
-    if (lower.includes('cto') || lower.includes('ceo') || lower.includes('coo') || lower.includes('chief')) {
-      return { points: 15, reason: 'C-level contact — executive decision maker' };
-    }
-    if (lower.includes('vp') || lower.includes('vice president')) {
-      return { points: 12, reason: 'VP-level contact — key decision maker' };
-    }
-    if (lower.includes('director')) {
-      return { points: 10, reason: 'Director-level contact — budget authority likely' };
-    }
-    if (lower.includes('head of') || lower.includes('manager')) {
-      return { points: 7, reason: 'Manager-level contact — influences buying decisions' };
-    }
-    if (lower.includes('senior') || lower.includes('lead')) {
-      return { points: 3, reason: 'Senior IC — technical evaluator and champion' };
-    }
-    return { points: 0, reason: '' };
-  }
-
-  /**
-   * Generate personalized outreach emails. (US-003)
+   * Generate personalized outreach emails for a deal context.
+   * Accepts a flexible context object built by the route layer.
    */
   async generateOutreach(
-    lead: GTLead,
+    context: Record<string, unknown>,
     sequenceType: string,
     variants: number = 3,
     tone: string = 'professional_casual'
   ): Promise<EmailVariant[]> {
-    logger.info(`Generating ${variants} outreach variants for ${lead.displayName}`);
+    logger.info(`Generating ${variants} outreach variants`);
 
     const prompt = `You are an expert sales copywriter for HawkRidge Systems.
 
 ${HAWKRIDGE_CONTEXT}
 
-Generate ${variants} email variants for a ${sequenceType} outreach to:
-Name: ${lead.displayName}
-Title: ${lead.title}
-Company: ${lead.company}
-Industry: ${lead.industry || 'Engineering/Manufacturing'}
-
-Company Intelligence:
-${lead.companyIntel.summary}
-
-Recent News:
-${lead.companyIntel.recentNews.join('\n')}
-
-Buying Signals:
-${lead.buyingSignals.map((s) => `- ${s.description}`).join('\n') || 'None detected'}
-
+Generate ${variants} email variants for a ${sequenceType} outreach.
+Context: ${JSON.stringify(context, null, 2)}
 Tone: ${tone}
 
 Return a JSON array of email variants:
@@ -207,21 +113,31 @@ Requirements:
       return JSON.parse(result);
     } catch (error) {
       logger.warn('AI outreach generation failed, using templates', { error });
-      return this.getFallbackOutreach(lead, variants);
+      return this.getFallbackOutreach(context, variants);
     }
   }
 
   /**
-   * Analyze a call transcript and generate intelligence. (US-005)
+   * Analyze a call transcript and generate intelligence.
    */
-  async analyzeCall(transcript: string, lead: GTLead): Promise<Partial<CallIntelligence>> {
-    logger.info(`Analyzing call for lead: ${lead.displayName}`);
+  async analyzeCall(
+    transcript: string,
+    activity: Partial<Activity>
+  ): Promise<{
+    summary: string;
+    actionItems: string[];
+    sentimentScore: number;
+    keyMoments: Array<{ timestamp: number; type: string; description: string; transcript: string; sentiment: number }>;
+    coachingTips: string[];
+    competitorsMentioned: string[];
+  }> {
+    logger.info(`Analyzing call activity: ${activity.id}`);
 
     const prompt = `You are a sales call intelligence analyst for HawkRidge Systems.
 
 ${HAWKRIDGE_CONTEXT}
 
-Analyze this call transcript between an SDR and ${lead.displayName} (${lead.title} at ${lead.company}):
+Analyze this call transcript:
 
 TRANSCRIPT:
 ${transcript}
@@ -229,7 +145,7 @@ ${transcript}
 Provide a JSON response with:
 {
   "summary": "3-5 sentence call summary focusing on outcomes and key discussion points",
-  "actionItems": ["specific follow-up actions for the SDR"],
+  "actionItems": ["specific follow-up actions for the AE"],
   "sentimentScore": number_from_-1_to_1,
   "keyMoments": [{
     "timestamp": approximate_seconds,
@@ -318,22 +234,32 @@ Provide a JSON response with:
     return data.choices[0].message.content;
   }
 
-  private getFallbackOutreach(lead: GTLead, variants: number): EmailVariant[] {
+  private getFallbackOutreach(context: Record<string, unknown>, variants: number): EmailVariant[] {
+    const dealCtx = (context.deal || {}) as Record<string, unknown>;
+    const stakeholderCtx = (context.stakeholder || {}) as Record<string, unknown>;
+    const accountCtx = (context.account || {}) as Record<string, unknown>;
+
+    const dealName = (dealCtx.name as string) || 'your initiative';
+    const stakeholderName = (stakeholderCtx.name as string) || 'there';
+    const firstName = stakeholderName.split(' ')[0];
+    const companyName = (accountCtx.name as string) || 'your company';
+    const industry = (accountCtx.industry as string) || 'engineering';
+
     const templates: EmailVariant[] = [
       {
-        subject: `Quick question about ${lead.company}'s engineering workflow`,
-        body: `Hi ${lead.displayName.split(' ')[0]},\n\nI noticed ${lead.company} is growing its engineering capabilities${lead.companyIntel.recentNews.length > 0 ? ' — congrats on the recent developments' : ''}.\n\nAt HawkRidge Systems, we help engineering teams like yours streamline their design-to-manufacture workflow with SolidWorks and complementary tools.\n\nWould you be open to a 15-minute call to explore if there's a fit?\n\nBest,\n[SDR Name]`,
-        personalizationPoints: ['company_name', 'recent_news'],
+        subject: `Quick question about ${companyName}'s engineering workflow`,
+        body: `Hi ${firstName},\n\nI noticed ${companyName} is growing its engineering capabilities.\n\nAt HawkRidge Systems, we help engineering teams like yours streamline their design-to-manufacture workflow with SolidWorks and complementary tools.\n\nWould you be open to a 15-minute call to explore if there's a fit?\n\nBest,\n[AE Name]`,
+        personalizationPoints: ['company_name'],
       },
       {
-        subject: `How ${lead.industry || 'engineering'} teams are cutting design cycles by 40%`,
-        body: `Hi ${lead.displayName.split(' ')[0]},\n\nI work with ${lead.title.includes('VP') || lead.title.includes('Director') ? 'engineering leaders' : 'engineering teams'} in the ${lead.industry || 'manufacturing'} space who are looking to accelerate their product development.\n\nOne of our clients recently reduced their design iteration cycle by 40% using integrated simulation and design automation.\n\nWould it be worth 15 minutes to see if similar results are achievable for ${lead.company}?\n\nBest,\n[SDR Name]`,
-        personalizationPoints: ['title_level', 'industry'],
+        subject: `How ${industry} teams are cutting design cycles by 40%`,
+        body: `Hi ${firstName},\n\nI work with engineering teams in the ${industry} space who are looking to accelerate their product development.\n\nOne of our clients recently reduced their design iteration cycle by 40% using integrated simulation and design automation.\n\nWould it be worth 15 minutes to see if similar results are achievable for ${companyName}?\n\nBest,\n[AE Name]`,
+        personalizationPoints: ['industry'],
       },
       {
-        subject: `${lead.company} + HawkRidge: a quick thought`,
-        body: `Hi ${lead.displayName.split(' ')[0]},\n\nI've been following ${lead.company}'s work in ${lead.industry || 'engineering'} — impressive trajectory.\n\nI had a thought on how HawkRidge Systems might help your team with ${lead.companyIntel.techStack.length > 0 ? `your ${lead.companyIntel.techStack[0]} workflow` : 'your engineering workflow'}.\n\nNo pressure — just a quick 15-minute conversation. Would next week work?\n\nBest,\n[SDR Name]`,
-        personalizationPoints: ['company_trajectory', 'tech_stack'],
+        subject: `${companyName} + HawkRidge: a quick thought`,
+        body: `Hi ${firstName},\n\nI've been following ${companyName}'s work in ${industry} — impressive trajectory.\n\nI had a thought on how HawkRidge Systems might help your team with your engineering workflow.\n\nNo pressure — just a quick 15-minute conversation. Would next week work?\n\nBest,\n[AE Name]`,
+        personalizationPoints: ['company_trajectory'],
       },
     ];
 

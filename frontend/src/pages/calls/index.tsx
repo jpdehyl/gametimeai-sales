@@ -1,5 +1,5 @@
 // ============================================================
-// Calls List Page — Recent call intelligence
+// Calls List Page — AI-analyzed call recordings with deal context
 // ============================================================
 
 import { useQuery } from '@tanstack/react-query';
@@ -26,7 +26,7 @@ export default function CallsPage() {
         <table className="w-full">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lead</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Deal</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase hidden md:table-cell">Outcome</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase hidden md:table-cell">Duration</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase hidden lg:table-cell">Sentiment</th>
@@ -56,32 +56,34 @@ export default function CallsPage() {
               </tr>
             ) : (
               calls.map((call) => {
-                const sentiment = getSentimentLabel(call.sentimentScore);
+                const sentimentLabel = call.sentiment
+                  ? { label: call.sentiment.charAt(0).toUpperCase() + call.sentiment.slice(1), color: call.sentiment === 'positive' ? 'text-green-600' : call.sentiment === 'negative' ? 'text-red-500' : 'text-gray-500' }
+                  : { label: '--', color: 'text-gray-400' };
                 return (
                   <tr key={call.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4">
-                      <Link href={`/calls/${call.id}`} className="group">
+                      <Link href={`/deals/${call.dealId}`} className="group">
                         <p className="text-sm font-semibold text-gray-900 group-hover:text-primary-600">
-                          {call.leadName}
+                          {call.dealName}
                         </p>
-                        <p className="text-xs text-gray-500">{call.leadCompany}</p>
+                        <p className="text-xs text-gray-500">{call.accountName}</p>
                       </Link>
                     </td>
                     <td className="px-6 py-4 hidden md:table-cell">
                       <span className={cn(
                         'status-badge',
-                        call.outcome === 'connected' ? 'bg-green-100 text-green-800' :
-                        call.outcome === 'voicemail' ? 'bg-yellow-100 text-yellow-800' :
+                        call.sentiment === 'positive' ? 'bg-green-100 text-green-800' :
+                        call.sentiment === 'negative' ? 'bg-red-100 text-red-800' :
                         'bg-gray-100 text-gray-800'
                       )}>
-                        {call.outcome}
+                        {call.direction}
                       </span>
                     </td>
                     <td className="px-6 py-4 hidden md:table-cell text-sm text-gray-600">
                       {formatDuration(call.duration)}
                     </td>
                     <td className="px-6 py-4 hidden lg:table-cell">
-                      <span className={cn('text-sm', sentiment.color)}>{sentiment.label}</span>
+                      <span className={cn('text-sm', sentimentLabel.color)}>{sentimentLabel.label}</span>
                     </td>
                     <td className="px-6 py-4 hidden lg:table-cell">
                       <p className="text-sm text-gray-600 max-w-xs truncate">{call.summary}</p>

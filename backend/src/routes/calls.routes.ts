@@ -1,7 +1,7 @@
 // ============================================================
-// Call Intelligence Routes — US-005
-// GET /api/v1/calls — Recent call list
-// GET /api/v1/calls/:id — Call detail with analysis
+// Call Intelligence Routes — AE Deal Intelligence Platform
+// GET /api/v1/calls — Recent calls with deal context
+// GET /api/v1/calls/:id — Call detail with coaching
 // POST /api/v1/webhooks/zra — ZRA webhook endpoint
 // ============================================================
 
@@ -13,34 +13,62 @@ import { logger } from '../utils/logger';
 const router = Router();
 
 /**
+ * Map a numeric sentiment (-1 to 1) to a human-readable label.
+ */
+function sentimentLabel(score: number | undefined): 'positive' | 'neutral' | 'negative' {
+  if (score === undefined) return 'neutral';
+  if (score > 0.25) return 'positive';
+  if (score < -0.25) return 'negative';
+  return 'neutral';
+}
+
+/**
  * GET /api/v1/calls
- * List recent calls with AI analysis.
+ * List recent calls with deal and account context.
+ * Supports filtering by dealId or accountId.
  */
 router.get('/', (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 20;
-  const leadId = req.query.leadId as string;
+  const dealId = req.query.dealId as string;
+  const accountId = req.query.accountId as string;
 
-  let calls = leadId
-    ? store.getCallsForLead(leadId)
-    : store.getRecentCalls(limit);
+  // Calls are Activity objects with type === 'call'
+  let calls = store
+    .getRecentActivities(limit * 3) // over-fetch to have enough after filtering
+    .filter((a) => a.type === 'call');
+
+  // Filter by dealId if provided
+  if (dealId) {
+    calls = calls.filter((c) => c.dealId === dealId);
+  }
+
+  // Filter by accountId if provided
+  if (accountId) {
+    calls = calls.filter((c) => c.accountId === accountId);
+  }
+
+  // Apply the requested limit
+  calls = calls.slice(0, limit);
 
   res.json({
     data: calls.map((call) => {
-      const lead = store.getLeadById(call.leadId);
+      const deal = call.dealId ? store.getDealById(call.dealId) : undefined;
+      const account = call.accountId ? store.getAccountById(call.accountId) : undefined;
+      const stakeholder = call.stakeholderId ? store.getStakeholderById(call.stakeholderId) : undefined;
+
       return {
         id: call.id,
-        leadId: call.leadId,
-        leadName: lead?.displayName || 'Unknown',
-        leadCompany: lead?.company || 'Unknown',
+        dealId: call.dealId,
+        dealName: deal?.name || 'Unknown',
+        accountName: account?.name || 'Unknown',
+        stakeholderName: stakeholder?.name || 'Unknown',
         duration: call.duration,
         direction: call.direction,
-        outcome: call.outcome,
+        sentiment: sentimentLabel(call.sentiment),
         summary: call.summary,
-        sentimentScore: call.sentimentScore,
-        analysisStatus: call.analysisStatus,
-        callDate: call.callDate,
-        actionItems: call.actionItems.length,
-        coachingTips: call.coachingTips.length,
+        callDate: call.occurredAt,
+        actionItemCount: call.actionItems?.length || 0,
+        coachingTipCount: 0, // PoC — coaching tips not yet implemented
       };
     }),
   });
@@ -48,12 +76,13 @@ router.get('/', (req: Request, res: Response) => {
 
 /**
  * GET /api/v1/calls/:id
- * Full call detail with transcript analysis, key moments, coaching.
+ * Full call detail with transcript analysis, key moments,
+ * coaching tips, and deal/account context.
  */
 router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
-  const call = store.calls.get(req.params.id);
+  const call = store.activities.get(req.params.id);
 
-  if (!call) {
+  if (!call || call.type !== 'call') {
     return res.status(404).json({
       error: 'NOT_FOUND',
       message: `Call ${req.params.id} not found`,
@@ -61,17 +90,45 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
     });
   }
 
-  const lead = store.getLeadById(call.leadId);
+  const deal = call.dealId ? store.getDealById(call.dealId) : undefined;
+  const account = call.accountId ? store.getAccountById(call.accountId) : undefined;
+  const stakeholder = call.stakeholderId ? store.getStakeholderById(call.stakeholderId) : undefined;
 
   res.json({
     data: {
-      ...call,
-      lead: lead
+      id: call.id,
+      dealId: call.dealId,
+      accountId: call.accountId,
+      stakeholderId: call.stakeholderId,
+      stakeholderName: stakeholder?.name || 'Unknown',
+      direction: call.direction,
+      subject: call.subject,
+      summary: call.summary,
+      sentiment: sentimentLabel(call.sentiment),
+      sentimentScore: call.sentiment,
+      keyInsights: call.keyInsights,
+      actionItems: call.actionItems,
+      buyingSignals: call.buyingSignals,
+      competitorsMentioned: call.competitorsMentioned,
+      duration: call.duration,
+      outcome: call.outcome,
+      talkRatio: call.talkRatio,
+      callDate: call.occurredAt,
+      deal: deal
         ? {
-            id: lead.id,
-            displayName: lead.displayName,
-            company: lead.company,
-            title: lead.title,
+            id: deal.id,
+            name: deal.name,
+            accountName: account?.name || 'Unknown',
+            stage: deal.stage,
+            value: deal.value,
+            healthScore: deal.healthScore,
+          }
+        : null,
+      account: account
+        ? {
+            id: account.id,
+            name: account.name,
+            industry: account.industry,
           }
         : null,
     },
@@ -89,7 +146,6 @@ export const webhookRouter = Router();
 /**
  * POST /api/v1/webhooks/zra
  * Receive ZRA call completed webhook and trigger AI analysis.
- * Per PRD Section 6: API Contracts
  */
 webhookRouter.post('/zra', async (req: Request, res: Response) => {
   logger.info('Received ZRA webhook', { event: req.body.event });
@@ -104,7 +160,7 @@ webhookRouter.post('/zra', async (req: Request, res: Response) => {
     });
   }
 
-  const { event, callId, transcript_url, duration, participants, direction } = req.body;
+  const { event, callId, transcript_url, duration, participants, direction, dealId, accountId } = req.body;
 
   if (event !== 'call.completed') {
     // Acknowledge non-call events
@@ -127,9 +183,11 @@ webhookRouter.post('/zra', async (req: Request, res: Response) => {
       duration: duration || 0,
       participants: participants || [],
       direction,
+      dealId,
+      accountId,
     });
 
-    // Return 202 Accepted — analysis runs async (per PRD)
+    // Return 202 Accepted — analysis runs async
     res.status(202).json({
       analysisId: result.analysisId,
       status: result.status,

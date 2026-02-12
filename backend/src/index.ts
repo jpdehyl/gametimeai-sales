@@ -1,6 +1,7 @@
 // ============================================================
 // GameTime AI — API Gateway
-// Express.js + Auth + RBAC (per PRD Section 4)
+// AE Deal Intelligence Platform
+// Express.js + Auth + RBAC
 // ============================================================
 
 import express from 'express';
@@ -12,7 +13,8 @@ import { logger } from './utils/logger';
 import { salesforceService } from './services/salesforce.service';
 
 // Route imports
-import leadsRouter from './routes/leads.routes';
+import dealsRouter from './routes/deals.routes';
+import accountsRouter from './routes/accounts.routes';
 import outreachRouter from './routes/outreach.routes';
 import callsRouter, { webhookRouter } from './routes/calls.routes';
 import dashboardRouter from './routes/dashboard.routes';
@@ -20,7 +22,7 @@ import dashboardRouter from './routes/dashboard.routes';
 const app = express();
 const httpServer = createServer(app);
 
-// WebSocket setup for real-time notifications (US-004)
+// WebSocket setup for real-time notifications
 const io = new SocketIOServer(httpServer, {
   cors: {
     origin: config.corsOrigin,
@@ -43,13 +45,15 @@ app.get('/api/health', (_req, res) => {
   res.json({
     status: 'healthy',
     service: 'gametimeai-api',
-    version: '1.0.0',
+    version: '2.0.0',
+    platform: 'ae-deal-intelligence',
     timestamp: new Date().toISOString(),
   });
 });
 
 // API Routes (v1)
-app.use('/api/v1/leads', leadsRouter);
+app.use('/api/v1/deals', dealsRouter);
+app.use('/api/v1/accounts', accountsRouter);
 app.use('/api/v1/outreach', outreachRouter);
 app.use('/api/v1/calls', callsRouter);
 app.use('/api/v1/webhooks', webhookRouter);
