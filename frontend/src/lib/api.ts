@@ -496,3 +496,127 @@ export async function markNotificationRead(id: string) {
     { method: 'PATCH' }
   );
 }
+
+// ============================================================
+// Inbound Leads (Virtual Assistant)
+// ============================================================
+
+// --- Interfaces ---
+
+export interface InboundLead {
+  id: string;
+  source: string;
+  sourceDetail?: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  company: string;
+  title?: string;
+  industry?: string;
+  employeeCount?: number;
+  website?: string;
+  message?: string;
+  productInterest?: string;
+  region?: string;
+  aiScore?: number;
+  aiScoreFactors?: string[];
+  aiSummary?: string;
+  aiQualified: boolean;
+  autoResponseSent: boolean;
+  autoResponseAt?: string;
+  autoResponseContent?: string;
+  responseTimeMs?: number;
+  status: string;
+  assignedSdrId?: string;
+  assignedAeId?: string;
+  convertedAccountId?: string;
+  convertedDealId?: string;
+  receivedAt: string;
+  qualifiedAt?: string;
+  convertedAt?: string;
+  autoResponses?: AutoResponseData[];
+  autoResponseCount?: number;
+}
+
+export interface AutoResponseData {
+  id: string;
+  subject: string;
+  body: string;
+  channel: string;
+  sentAt?: string;
+  opened: boolean;
+  replied: boolean;
+  confidence?: number;
+  model?: string;
+}
+
+export interface LeadMetrics {
+  totalLeads: number;
+  todayLeadCount: number;
+  weekLeadCount: number;
+  avgResponseTimeMs: number;
+  autoResponseRate: number;
+  qualificationRate: number;
+  conversionRate: number;
+  leadsByStatus: Record<string, number>;
+  leadsBySource: Record<string, number>;
+  leadsByRegion: Record<string, number>;
+  speedToLeadDistribution?: {
+    under5s: number;
+    under15s: number;
+    under30s: number;
+    under60s: number;
+    over60s: number;
+  };
+}
+
+// --- API Functions ---
+
+export async function fetchLeads(params?: {
+  status?: string;
+  source?: string;
+  region?: string;
+  search?: string;
+  page?: number;
+}) {
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set('status', params.status);
+  if (params?.source) searchParams.set('source', params.source);
+  if (params?.region) searchParams.set('region', params.region);
+  if (params?.search) searchParams.set('search', params.search);
+  if (params?.page) searchParams.set('page', String(params.page));
+  const query = searchParams.toString();
+  return fetchAPI<{ data: InboundLead[]; pagination: { page: number; pageSize: number; total: number; totalPages: number } }>(
+    `/api/v1/leads${query ? `?${query}` : ''}`
+  );
+}
+
+export async function fetchLeadDetail(id: string) {
+  return fetchAPI<{ data: InboundLead }>(`/api/v1/leads/${id}`);
+}
+
+export async function fetchLeadMetrics() {
+  return fetchAPI<{ data: LeadMetrics }>('/api/v1/leads/metrics');
+}
+
+export async function qualifyLead(id: string, qualified: boolean, notes: string, assignedAeId?: string) {
+  return fetchAPI<{ data: InboundLead }>(`/api/v1/leads/${id}/qualify`, {
+    method: 'POST',
+    body: JSON.stringify({ qualified, notes, assignedAeId }),
+  });
+}
+
+export async function convertLead(id: string) {
+  return fetchAPI<{
+    data: {
+      leadId: string;
+      status: string;
+      convertedAt: string;
+      account: { id: string; name: string };
+      deal: { id: string; name: string; stage: string };
+    };
+  }>(`/api/v1/leads/${id}/convert`, {
+    method: 'POST',
+  });
+}

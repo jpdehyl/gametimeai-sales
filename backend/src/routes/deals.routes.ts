@@ -7,7 +7,7 @@
 // ============================================================
 
 import { Router, Request, Response } from 'express';
-import { store } from '../store';
+import { db } from '../db';
 
 const router = Router();
 
@@ -16,7 +16,7 @@ const router = Router();
  * List all deals with pipeline data.
  * Supports filtering by stage, search, and pagination.
  */
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
   const pageSize = parseInt(req.query.pageSize as string) || 20;
   const stage = req.query.stage as string;
@@ -24,21 +24,7 @@ router.get('/', (req: Request, res: Response) => {
   const sortBy = (req.query.sortBy as string) || 'closeDate';
   const sortDir = (req.query.sortDir as string) || 'asc';
 
-  let deals = store.getDeals();
-
-  // Filter by stage
-  if (stage) {
-    deals = deals.filter((d) => d.stage === stage);
-  }
-
-  // Search filter
-  if (search) {
-    deals = deals.filter(
-      (d) =>
-        d.name.toLowerCase().includes(search) ||
-        (store.getAccountById(d.accountId)?.name || 'Unknown').toLowerCase().includes(search)
-    );
-  }
+  let deals = await db.getDeals({ stage, search: search || undefined });
 
   // Sort
   deals.sort((a, b) => {
@@ -65,14 +51,12 @@ router.get('/', (req: Request, res: Response) => {
   const start = (page - 1) * pageSize;
   const paginatedDeals = deals.slice(start, start + pageSize);
 
-  res.json({
-    data: paginatedDeals.map((deal) => {
-      // Look up account name and owner name from their respective stores
-      const accountName = store.getAccountById(deal.accountId)?.name || 'Unknown';
-      const ownerName = store.getUserById(deal.ownerId)?.name || 'Unknown';
+  const dealResults = await Promise.all(
+    paginatedDeals.map(async (deal) => {
+      const account = await db.getAccountById(deal.accountId);
+      const owner = await db.getUserById(deal.ownerId);
+      const activities = await db.getActivitiesForDeal(deal.id);
 
-      // Get the latest activity date for the deal
-      const activities = store.getActivitiesForDeal(deal.id);
       const lastActivityDate = activities.length > 0
         ? activities.reduce((latest, act) =>
             act.occurredAt > latest ? act.occurredAt : latest,
@@ -84,14 +68,14 @@ router.get('/', (req: Request, res: Response) => {
         id: deal.id,
         name: deal.name,
         accountId: deal.accountId,
-        accountName,
+        accountName: account?.name || 'Unknown',
         amount: deal.value,
         stage: deal.stage,
         probability: deal.probability,
         closeDate: deal.closeDate,
         healthScore: deal.healthScore,
         riskFactors: deal.riskFactors,
-        ownerName,
+        ownerName: owner?.name || 'Unknown',
         nextActions: (deal.nextBestActions || [])
           .filter((a) => !a.isCompleted)
           .slice(0, 2)
@@ -103,7 +87,11 @@ router.get('/', (req: Request, res: Response) => {
         daysInStage: deal.daysInStage,
         lastActivityDate,
       };
-    }),
+    })
+  );
+
+  res.json({
+    data: dealResults,
     pagination: {
       page,
       pageSize,
@@ -118,8 +106,8 @@ router.get('/', (req: Request, res: Response) => {
  * Full deal room: deal data, account info, stakeholders,
  * activities, competitive intel, MEDDIC scorecard, and next actions.
  */
-router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
-  const deal = store.getDealById(req.params.id);
+router.get('/:id', async (req: Request<{ id: string }>, res: Response) => {
+  const deal = await db.getDealById(req.params.id);
 
   if (!deal) {
     return res.status(404).json({
@@ -129,15 +117,14 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
     });
   }
 
-  const account = store.getAccountById(deal.accountId);
-  const stakeholders = store.getStakeholdersForDeal(deal.id);
-  const activities = store.getActivitiesForDeal(deal.id);
+  const account = await db.getAccountById(deal.accountId);
+  const stakeholders = await db.getStakeholdersForDeal(deal.id);
+  const activities = await db.getActivitiesForDeal(deal.id);
+  const owner = await db.getUserById(deal.ownerId);
 
-  // Look up account name and owner name
   const accountName = account?.name || 'Unknown';
-  const ownerName = store.getUserById(deal.ownerId)?.name || 'Unknown';
+  const ownerName = owner?.name || 'Unknown';
 
-  // Get the latest activity date for the deal
   const lastActivityDate = activities.length > 0
     ? activities.reduce((latest, act) =>
         act.occurredAt > latest ? act.occurredAt : latest,
@@ -145,25 +132,17 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
       )
     : null;
 
-  // Derive engagement level from contact frequency
   const deriveEngagementLevel = (contactFrequency: string): string => {
     switch (contactFrequency) {
-      case 'weekly':
-        return 'high';
-      case 'biweekly':
-        return 'medium-high';
-      case 'monthly':
-        return 'medium';
-      case 'quarterly':
-        return 'low';
-      case 'never':
-        return 'none';
-      default:
-        return 'unknown';
+      case 'weekly': return 'high';
+      case 'biweekly': return 'medium-high';
+      case 'monthly': return 'medium';
+      case 'quarterly': return 'low';
+      case 'never': return 'none';
+      default: return 'unknown';
     }
   };
 
-  // Build competitive intel from competitors array
   const competitiveIntel = {
     competitors: deal.competitors.map((c) => ({
       name: c.competitorName,
@@ -183,6 +162,24 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
       .filter((c) => c.threatLevel === 'high')
       .map((c) => `${c.competitorName}: ${c.strengths[0] || 'Active threat'}`),
   };
+
+  const activityResults = await Promise.all(
+    activities.map(async (a) => {
+      const stakeholder = a.stakeholderId
+        ? await db.getStakeholderById(a.stakeholderId)
+        : null;
+      return {
+        id: a.id,
+        type: a.type,
+        description: a.summary,
+        dealId: a.dealId,
+        dealName: deal.name,
+        stakeholderName: stakeholder?.name || null,
+        timestamp: a.occurredAt,
+        outcome: a.outcome,
+      };
+    })
+  );
 
   res.json({
     data: {
@@ -226,18 +223,7 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
         lastContactDate: s.lastContactedAt,
         influenceLevel: s.influenceLevel,
       })),
-      activities: activities.map((a) => ({
-        id: a.id,
-        type: a.type,
-        description: a.summary,
-        dealId: a.dealId,
-        dealName: deal.name,
-        stakeholderName: a.stakeholderId
-          ? store.getStakeholderById(a.stakeholderId)?.name || 'Unknown'
-          : null,
-        timestamp: a.occurredAt,
-        outcome: a.outcome,
-      })),
+      activities: activityResults,
       competitiveIntel,
       meddic: deal.meddic,
       nextActions: deal.nextBestActions.map((a) => ({
@@ -255,21 +241,10 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
  */
 router.post(
   '/:id/actions/:actionId/complete',
-  (req: Request<{ id: string; actionId: string }>, res: Response) => {
-    const deal = store.getDealById(req.params.id);
+  async (req: Request<{ id: string; actionId: string }>, res: Response) => {
+    const result = await db.completeAction(req.params.id, req.params.actionId);
 
-    if (!deal) {
-      return res.status(404).json({
-        error: 'NOT_FOUND',
-        message: `Deal ${req.params.id} not found`,
-        statusCode: 404,
-      });
-    }
-
-    const actions = deal.nextBestActions;
-    const action = actions.find((a) => a.id === req.params.actionId);
-
-    if (!action) {
+    if (!result) {
       return res.status(404).json({
         error: 'NOT_FOUND',
         message: `Action ${req.params.actionId} not found on deal ${req.params.id}`,
@@ -277,17 +252,13 @@ router.post(
       });
     }
 
-    action.isCompleted = true;
-    action.completedAt = new Date();
-    deal.updatedAt = new Date();
-
     res.json({
       data: {
-        dealId: deal.id,
-        actionId: action.id,
+        dealId: req.params.id,
+        actionId: result.action.id,
         completed: true,
-        completedAt: action.completedAt,
-        remainingActions: actions.filter((a) => !a.isCompleted).length,
+        completedAt: result.action.completedAt,
+        remainingActions: result.remainingActions,
       },
     });
   }
@@ -295,10 +266,10 @@ router.post(
 
 /**
  * POST /api/v1/deals/:id/stage
- * Update deal stage. Returns the updated deal.
+ * Update deal stage.
  */
-router.post('/:id/stage', (req: Request<{ id: string }>, res: Response) => {
-  const deal = store.getDealById(req.params.id);
+router.post('/:id/stage', async (req: Request<{ id: string }>, res: Response) => {
+  const deal = await db.getDealById(req.params.id);
 
   if (!deal) {
     return res.status(404).json({
@@ -319,13 +290,8 @@ router.post('/:id/stage', (req: Request<{ id: string }>, res: Response) => {
   }
 
   const validStages = [
-    'discovery',
-    'qualification',
-    'technical_evaluation',
-    'proposal',
-    'negotiation',
-    'closed_won',
-    'closed_lost',
+    'discovery', 'qualification', 'technical_evaluation',
+    'proposal', 'negotiation', 'closed_won', 'closed_lost',
   ];
 
   if (!validStages.includes(stage)) {
@@ -336,32 +302,27 @@ router.post('/:id/stage', (req: Request<{ id: string }>, res: Response) => {
     });
   }
 
-  const previousStage = deal.stage;
-  deal.stage = stage;
-  deal.daysInStage = 0;
-  deal.updatedAt = new Date();
-
-  // Update probability based on stage
   const stageProbability: Record<string, number> = {
-    discovery: 10,
-    qualification: 25,
-    technical_evaluation: 40,
-    proposal: 60,
-    negotiation: 80,
-    closed_won: 100,
-    closed_lost: 0,
+    discovery: 10, qualification: 25, technical_evaluation: 40,
+    proposal: 60, negotiation: 80, closed_won: 100, closed_lost: 0,
   };
-  deal.probability = stageProbability[stage] ?? deal.probability;
+
+  const previousStage = deal.stage;
+  const updatedDeal = await db.updateDealStage(
+    req.params.id,
+    stage,
+    stageProbability[stage] ?? deal.probability
+  );
 
   res.json({
     data: {
       id: deal.id,
       name: deal.name,
       previousStage,
-      newStage: deal.stage,
-      probability: deal.probability,
-      daysInStage: deal.daysInStage,
-      updatedAt: deal.updatedAt,
+      newStage: stage,
+      probability: updatedDeal?.probability ?? deal.probability,
+      daysInStage: 0,
+      updatedAt: updatedDeal?.updatedAt ?? new Date(),
     },
   });
 });

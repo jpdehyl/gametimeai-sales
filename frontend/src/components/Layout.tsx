@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   GitBranch,
   Building2,
+  Inbox,
   Phone,
   BarChart3,
   Bell,
@@ -23,6 +24,7 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Pipeline', href: '/deals', icon: GitBranch },
   { name: 'Accounts', href: '/accounts', icon: Building2 },
+  { name: 'Lead Inbox', href: '/leads', icon: Inbox },
   { name: 'Calls', href: '/calls', icon: Phone },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
 ];
