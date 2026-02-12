@@ -1,5 +1,6 @@
 // ============================================================
-// API Client — Fetch wrapper for GameTime backend
+// API Client — GameTime AI Deal Intelligence Platform
+// Monaco-style deal room for Account Executives
 // ============================================================
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -22,216 +23,294 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-// Dashboard
-export async function fetchDashboard() {
-  return fetchAPI<{ data: DashboardData }>('/api/v1/dashboard');
-}
+// ============================================================
+// Deal Stages
+// ============================================================
 
-// Leads
-export async function fetchLeads(params?: {
-  page?: number;
-  pageSize?: number;
-  status?: string;
-  minScore?: number;
-  search?: string;
-}) {
-  const searchParams = new URLSearchParams();
-  if (params?.page) searchParams.set('page', String(params.page));
-  if (params?.pageSize) searchParams.set('pageSize', String(params.pageSize));
-  if (params?.status) searchParams.set('status', params.status);
-  if (params?.minScore) searchParams.set('minScore', String(params.minScore));
-  if (params?.search) searchParams.set('search', params.search);
+export type DealStage =
+  | 'discovery'
+  | 'qualification'
+  | 'technical_evaluation'
+  | 'proposal'
+  | 'negotiation'
+  | 'closed_won'
+  | 'closed_lost';
 
-  const query = searchParams.toString();
-  return fetchAPI<{ data: LeadSummary[]; pagination: Pagination }>(
-    `/api/v1/leads${query ? `?${query}` : ''}`
-  );
-}
-
-export async function fetchLeadDetail(id: string) {
-  return fetchAPI<{ data: LeadDetail }>(`/api/v1/leads/${id}`);
-}
-
-export async function rescoreLead(id: string) {
-  return fetchAPI<{ data: ScoreResult }>(`/api/v1/leads/${id}/score`, { method: 'POST' });
-}
-
-export async function syncLeads() {
-  return fetchAPI<{ data: SyncResult }>('/api/v1/leads/sync', { method: 'POST' });
-}
-
-// Outreach
-export async function generateOutreach(params: {
-  leadId: string;
-  sequenceType: string;
-  variants?: number;
-  tone?: string;
-}) {
-  return fetchAPI<{ data: OutreachResult }>('/api/v1/outreach/generate', {
-    method: 'POST',
-    body: JSON.stringify(params),
-  });
-}
-
-// Calls
-export async function fetchCalls(params?: { leadId?: string; limit?: number }) {
-  const searchParams = new URLSearchParams();
-  if (params?.leadId) searchParams.set('leadId', params.leadId);
-  if (params?.limit) searchParams.set('limit', String(params.limit));
-  const query = searchParams.toString();
-  return fetchAPI<{ data: CallSummary[] }>(`/api/v1/calls${query ? `?${query}` : ''}`);
-}
-
-export async function fetchCallDetail(id: string) {
-  return fetchAPI<{ data: CallDetail }>(`/api/v1/calls/${id}`);
-}
-
-// Notifications
-export async function markNotificationRead(id: string) {
-  return fetchAPI<{ data: { id: string; read: boolean } }>(
-    `/api/v1/dashboard/notifications/${id}`,
-    { method: 'PATCH' }
-  );
-}
+export const DEAL_STAGES: Array<{ key: DealStage; label: string; order: number; color: string }> = [
+  { key: 'discovery', label: 'Discovery', order: 1, color: '#6366f1' },
+  { key: 'qualification', label: 'Qualification', order: 2, color: '#8b5cf6' },
+  { key: 'technical_evaluation', label: 'Technical Evaluation', order: 3, color: '#3b82f6' },
+  { key: 'proposal', label: 'Proposal', order: 4, color: '#f59e0b' },
+  { key: 'negotiation', label: 'Negotiation', order: 5, color: '#f97316' },
+  { key: 'closed_won', label: 'Closed Won', order: 6, color: '#22c55e' },
+  { key: 'closed_lost', label: 'Closed Lost', order: 7, color: '#ef4444' },
+];
 
 // ============================================================
-// Frontend Types (mirrors backend but tailored for UI)
+// TypeScript Interfaces
 // ============================================================
+
+// --- Dashboard ---
 
 export interface DashboardData {
-  prioritizedLeads: LeadSummary[];
-  pendingFollowUps: FollowUp[];
-  recentCalls: CallSummary[];
-  pipelineSnapshot: PipelineSnapshot;
-  notifications: NotificationItem[];
-  unreadNotifications: number;
-}
-
-export interface LeadSummary {
-  id: string;
-  salesforceId: string;
-  displayName: string;
-  email: string;
-  company: string;
-  title: string;
-  phone?: string;
-  industry?: string;
-  aiScore: number;
-  scoreFactors: string[];
-  recommendedAction?: string;
-  lastActivity?: string;
-  status: string;
-  syncStatus: string;
-  contactAttempts: number;
-  buyingSignals: number;
-}
-
-export interface LeadDetail extends Omit<LeadSummary, 'buyingSignals'> {
-  website?: string;
-  companyIntel: {
-    summary: string;
-    recentNews: string[];
-    techStack: string[];
-    estimatedRevenue?: string;
-    employeeCount?: number;
+  quotaAttainment: {
+    quota: number;
+    closedWon: number;
+    pipelineWeighted: number;
+    gap: number;
+    percentAttained: number;
+    projectedAttainment: number;
   };
-  buyingSignals: Array<{
-    type: string;
-    description: string;
-    detectedAt: string;
-    source: string;
-    impactScore: number;
-  }>;
-  interactions: {
-    calls: Array<{
-      id: string;
-      date: string;
-      duration: number;
-      outcome: string;
-      summary: string;
-      sentimentScore: number;
+  pipelineSummary: {
+    totalValue: number;
+    totalDeals: number;
+    weightedValue: number;
+    averageDealSize: number;
+    averageSalesCycle: number;
+    byStage: Array<{
+      stage: DealStage;
+      label: string;
+      count: number;
+      value: number;
+      weightedValue: number;
     }>;
-    totalCalls: number;
   };
-  lastScoredAt: string | null;
-  lastSyncedAt: string;
+  dealsAtRisk: Array<{
+    id: string;
+    name: string;
+    accountName: string;
+    amount: number;
+    stage: DealStage;
+    healthScore: number;
+    topRisk: string;
+    daysInStage: number;
+  }>;
+  todayActions: NextBestAction[];
+  recentActivities: Activity[];
+  forecast: {
+    commit: number;
+    bestCase: number;
+    pipeline: number;
+    target: number;
+  };
+  notifications: Notification[];
 }
 
-export interface FollowUp {
+// --- Deals ---
+
+export interface DealSummary {
   id: string;
-  displayName: string;
-  company: string;
-  aiScore: number;
-  lastContactedAt?: string;
-  recommendedAction?: string;
+  salesforceOpportunityId: string;
+  name: string;
+  accountName: string;
+  accountId: string;
+  amount: number;
+  stage: DealStage;
+  healthScore: number;
+  healthTrend: 'improving' | 'stable' | 'declining';
+  winProbability: number;
+  closeDate: string;
+  daysInCurrentStage: number;
+  stakeholderCount: number;
+  forecastCategory: 'commit' | 'best_case' | 'pipeline' | 'omitted';
+  lastActivityAt: string;
 }
 
-export interface CallSummary {
-  id: string;
-  leadId: string;
-  leadName: string;
-  leadCompany: string;
-  duration: number;
-  direction: string;
-  outcome: string;
-  summary: string;
-  sentimentScore: number;
-  analysisStatus: string;
-  callDate: string;
-  actionItems: number;
-  coachingTips: number;
+export interface DealDetail extends DealSummary {
+  account: Account;
+  stakeholders: Stakeholder[];
+  activities: Activity[];
+  competitors: CompetitorIntel[];
+  nextBestActions: NextBestAction[];
+  riskFactors: RiskFactor[];
+  strengths: string[];
+  meddicScore: MEDDICScore;
+  products: Array<{
+    id: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+  }>;
 }
 
-export interface CallDetail {
+// --- Accounts ---
+
+export interface Account {
   id: string;
-  leadId: string;
-  salesforceTaskId?: string;
-  duration: number;
-  direction: string;
-  outcome: string;
-  summary: string;
-  actionItems: string[];
-  sentimentScore: number;
-  talkRatio: number;
-  keyMoments: Array<{
+  name: string;
+  domain: string;
+  industry: string;
+  employeeCount: number;
+  annualRevenue: number;
+  address: string;
+  techStack: string[];
+  companyDescription: string;
+  recentNews: Array<{
+    title: string;
+    url: string;
+    publishedAt: string;
+    summary: string;
+  }>;
+  tier: 'enterprise' | 'mid_market' | 'smb';
+  healthScore: number;
+  totalPipelineValue: number;
+  totalClosedWon: number;
+  lastEngagementAt: string;
+}
+
+// --- Stakeholders ---
+
+export type StakeholderRole =
+  | 'economic_buyer'
+  | 'champion'
+  | 'technical_evaluator'
+  | 'end_user'
+  | 'blocker'
+  | 'coach'
+  | 'influencer';
+
+export interface Stakeholder {
+  id: string;
+  accountId: string;
+  dealIds: string[];
+  name: string;
+  title: string;
+  email: string;
+  phone: string;
+  linkedinUrl: string;
+  role: StakeholderRole;
+  influence: 'high' | 'medium' | 'low';
+  sentiment: 'positive' | 'neutral' | 'negative' | 'unknown';
+  engagementLevel: 'high' | 'medium' | 'low' | 'none';
+  background: string;
+  priorities: string[];
+  concerns: string[];
+  lastContactedAt: string;
+  totalInteractions: number;
+  nextAction: string;
+}
+
+// --- Activities ---
+
+export interface Activity {
+  id: string;
+  dealId: string;
+  accountId: string;
+  stakeholderId: string;
+  type: 'call' | 'email' | 'meeting' | 'demo' | 'note' | 'task' | 'stage_change';
+  subject: string;
+  description: string;
+  occurredAt: string;
+  callDuration?: number;
+  callSentiment?: 'positive' | 'neutral' | 'negative';
+  callSummary?: string;
+  callActionItems?: string[];
+  callCoachingTips?: string[];
+  callKeyMoments?: Array<{
     timestamp: number;
     type: string;
     description: string;
     transcript: string;
     sentiment: number;
   }>;
-  coachingTips: string[];
-  competitorsMentioned: string[];
-  analysisStatus: string;
-  callDate: string;
-  lead?: {
-    id: string;
-    displayName: string;
-    company: string;
-    title: string;
-  };
 }
 
-export interface PipelineSnapshot {
-  totalLeads: number;
-  newLeads: number;
-  contacted: number;
-  engaged: number;
-  qualified: number;
-  nurture?: number;
-  averageScore: number;
-  lastSyncedAt: string;
+// --- Competitor Intelligence ---
+
+export interface CompetitorIntel {
+  name: string;
+  status: 'active' | 'evaluating' | 'eliminated' | 'unknown';
+  strengths: string[];
+  weaknesses: string[];
+  ourAdvantages: string[];
+  talkingPoints: string[];
+  threatLevel: 'high' | 'medium' | 'low';
 }
 
-export interface NotificationItem {
+// --- Next Best Actions ---
+
+export interface NextBestAction {
   id: string;
-  type: string;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  type: 'call' | 'email' | 'meeting' | 'research' | 'internal' | 'follow_up' | 'escalation';
+  title: string;
+  description: string;
+  reasoning: string;
+  suggestedDate?: string;
+  stakeholderId?: string;
+  completed: boolean;
+}
+
+// --- MEDDIC ---
+
+export interface MEDDICScore {
+  metrics: { score: number; notes: string };
+  economicBuyer: { score: number; notes: string };
+  decisionCriteria: { score: number; notes: string };
+  decisionProcess: { score: number; notes: string };
+  identifyPain: { score: number; notes: string };
+  champion: { score: number; notes: string };
+  overallScore: number;
+}
+
+// --- Risk Factors ---
+
+export interface RiskFactor {
+  id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  category: 'engagement' | 'competition' | 'timeline' | 'stakeholder' | 'technical' | 'budget';
+  description: string;
+  recommendation: string;
+}
+
+// --- Meeting Prep ---
+
+export interface MeetingPrep {
+  id: string;
+  dealId: string;
+  scheduledAt: string;
+  attendees: Array<{
+    name: string;
+    title: string;
+    role: StakeholderRole;
+    sentiment: string;
+  }>;
+  objective: string;
+  agenda: Array<{
+    topic: string;
+    duration: number;
+    notes: string;
+  }>;
+  keyTalkingPoints: string[];
+  stakeholderBriefs: Array<{
+    name: string;
+    title: string;
+    priorities: string[];
+    concerns: string[];
+    approachTips: string;
+  }>;
+  competitiveContext: string;
+  risksToAddress: string[];
+  desiredOutcomes: string[];
+  openQuestions: string[];
+}
+
+// --- Notifications ---
+
+export interface Notification {
+  id: string;
+  type: 'deal_risk' | 'action_due' | 'stage_change' | 'competitor_alert' | 'stakeholder_change' | 'coaching' | 'system';
+  severity: 'critical' | 'warning' | 'info';
   title: string;
   message: string;
-  leadId?: string;
+  dealId?: string;
+  accountId?: string;
   read: boolean;
   createdAt: string;
 }
+
+// --- Outreach ---
 
 export interface OutreachResult {
   sequenceId: string;
@@ -244,24 +323,171 @@ export interface OutreachResult {
   personalizationContext: string;
 }
 
-export interface ScoreResult {
-  leadId: string;
-  previousScore: number;
-  newScore: number;
-  factors: string[];
-  scoredAt: string;
+// --- Calls ---
+
+export interface CallSummary {
+  id: string;
+  dealId: string;
+  dealName: string;
+  accountName: string;
+  stakeholderName: string;
+  duration: number;
+  direction: 'inbound' | 'outbound';
+  sentiment: 'positive' | 'neutral' | 'negative';
+  summary: string;
+  callDate: string;
+  actionItemCount: number;
+  coachingTipCount: number;
 }
 
-export interface SyncResult {
-  message: string;
-  synced: number;
-  errors: number;
-  timestamp: string;
+export interface CallDetail {
+  id: string;
+  dealId: string;
+  accountId: string;
+  stakeholderId: string;
+  salesforceTaskId?: string;
+  duration: number;
+  direction: 'inbound' | 'outbound';
+  sentiment: 'positive' | 'neutral' | 'negative';
+  summary: string;
+  actionItems: string[];
+  talkRatio: number;
+  keyMoments: Array<{
+    timestamp: number;
+    type: string;
+    description: string;
+    transcript: string;
+    sentiment: number;
+  }>;
+  coachingTips: string[];
+  competitorsMentioned: string[];
+  callDate: string;
+  deal?: {
+    id: string;
+    name: string;
+    accountName: string;
+    stage: DealStage;
+  };
+  stakeholder?: {
+    id: string;
+    name: string;
+    title: string;
+    role: StakeholderRole;
+  };
 }
 
-export interface Pagination {
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
+// ============================================================
+// API Functions
+// ============================================================
+
+// --- Dashboard ---
+
+export async function fetchDashboard() {
+  return fetchAPI<{ data: DashboardData }>('/api/v1/dashboard');
+}
+
+// --- Deals ---
+
+export async function fetchDeals(params?: {
+  stage?: DealStage;
+  search?: string;
+  forecastCategory?: string;
+  minHealthScore?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}) {
+  const searchParams = new URLSearchParams();
+  if (params?.stage) searchParams.set('stage', params.stage);
+  if (params?.search) searchParams.set('search', params.search);
+  if (params?.forecastCategory) searchParams.set('forecastCategory', params.forecastCategory);
+  if (params?.minHealthScore) searchParams.set('minHealthScore', String(params.minHealthScore));
+  if (params?.sortBy) searchParams.set('sortBy', params.sortBy);
+  if (params?.sortOrder) searchParams.set('sortOrder', params.sortOrder);
+
+  const query = searchParams.toString();
+  return fetchAPI<{ data: DealSummary[] }>(
+    `/api/v1/deals${query ? `?${query}` : ''}`
+  );
+}
+
+export async function fetchDealDetail(id: string) {
+  return fetchAPI<{ data: DealDetail }>(`/api/v1/deals/${id}`);
+}
+
+export async function updateDealStage(id: string, stage: DealStage) {
+  return fetchAPI<{ data: DealDetail }>(`/api/v1/deals/${id}/stage`, {
+    method: 'POST',
+    body: JSON.stringify({ stage }),
+  });
+}
+
+export async function completeAction(dealId: string, actionId: string) {
+  return fetchAPI<{ data: NextBestAction }>(`/api/v1/deals/${dealId}/actions/${actionId}/complete`, {
+    method: 'POST',
+  });
+}
+
+// --- Accounts ---
+
+export async function fetchAccounts() {
+  return fetchAPI<{ data: Account[] }>('/api/v1/accounts');
+}
+
+export async function fetchAccountDetail(id: string) {
+  return fetchAPI<{ data: Account }>(`/api/v1/accounts/${id}`);
+}
+
+// --- Calls ---
+
+export async function fetchCalls(params?: {
+  dealId?: string;
+  accountId?: string;
+  stakeholderId?: string;
+  limit?: number;
+}) {
+  const searchParams = new URLSearchParams();
+  if (params?.dealId) searchParams.set('dealId', params.dealId);
+  if (params?.accountId) searchParams.set('accountId', params.accountId);
+  if (params?.stakeholderId) searchParams.set('stakeholderId', params.stakeholderId);
+  if (params?.limit) searchParams.set('limit', String(params.limit));
+
+  const query = searchParams.toString();
+  return fetchAPI<{ data: CallSummary[] }>(`/api/v1/calls${query ? `?${query}` : ''}`);
+}
+
+export async function fetchCallDetail(id: string) {
+  return fetchAPI<{ data: CallDetail }>(`/api/v1/calls/${id}`);
+}
+
+// --- Outreach ---
+
+export async function generateOutreach(params: {
+  dealId: string;
+  stakeholderId?: string;
+  sequenceType: string;
+  variants?: number;
+  tone?: string;
+  context?: string;
+}) {
+  return fetchAPI<{ data: OutreachResult }>('/api/v1/outreach/generate', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// --- Meeting Prep ---
+
+export async function generateMeetingPrep(dealId: string) {
+  return fetchAPI<{ data: MeetingPrep }>(`/api/v1/deals/${dealId}/meeting-prep`, {
+    method: 'POST',
+  });
+}
+
+// --- Notifications ---
+
+export async function markNotificationRead(id: string) {
+  return fetchAPI<{ data: { id: string; read: boolean } }>(
+    `/api/v1/dashboard/notifications/${id}`,
+    { method: 'PATCH' }
+  );
 }
