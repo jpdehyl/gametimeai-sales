@@ -1,0 +1,278 @@
+// ============================================================
+// GameTime AI — Prisma Schema
+// AE Deal Intelligence + Virtual Assistant Platform
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── Users ───────────────────────────────────────────────────
+
+model User {
+  id               String   @id
+  email            String   @unique
+  name             String
+  role             String   // 'ae' | 'sdr' | 'manager' | 'admin'
+  title            String?
+  region           String?
+  salesforceUserId String?
+  quota            Float?
+  closedWonYTD     Float?
+  createdAt        DateTime @default(now())
+}
+
+// ─── Accounts ────────────────────────────────────────────────
+
+model Account {
+  id                  String   @id
+  name                String
+  industry            String
+  website             String?
+  employeeCount       Int?
+  estimatedRevenue    String?
+  address             String?
+  region              String?
+  summary             String
+  recentNews          String   @default("[]") // JSON array
+  techStack           String   @default("[]") // JSON array
+  healthScore         Int      @default(50)
+  salesforceAccountId String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  deals        Deal[]
+  stakeholders Stakeholder[]
+  inboundLeads InboundLead[]
+}
+
+// ─── Deals ───────────────────────────────────────────────────
+
+model Deal {
+  id                      String    @id
+  accountId               String
+  salesforceOpportunityId String?
+  name                    String
+  value                   Float
+  stage                   String
+  probability             Int
+  winProbability          Int
+  products                String    @default("[]") // JSON array
+  seatCount               Int?
+  closeDate               DateTime
+  nextMeetingDate         DateTime?
+  daysInStage             Int       @default(0)
+  healthScore             Int       @default(50)
+  meddic                  String    @default("{}") // JSON MEDDICScore
+  stageHistory            String    @default("[]") // JSON array
+  ownerId                 String
+  dealNotes               String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  account         Account          @relation(fields: [accountId], references: [id])
+  stakeholders    Stakeholder[]
+  activities      Activity[]
+  riskFactors     RiskFactor[]
+  competitors     CompetitorIntel[]
+  nextBestActions NextBestAction[]
+}
+
+// ─── Stakeholders ────────────────────────────────────────────
+
+model Stakeholder {
+  id               String    @id
+  accountId        String
+  dealId           String
+  name             String
+  title            String
+  email            String
+  phone            String?
+  linkedinUrl      String?
+  roles            String    @default("[]") // JSON array of StakeholderRole
+  isPrimary        Boolean   @default(false)
+  influenceLevel   Int       @default(5)
+  sentiment        String    @default("neutral")
+  sentimentTrend   String    @default("stable")
+  lastContactedAt  DateTime?
+  contactFrequency String    @default("monthly")
+  preferredChannel String    @default("email")
+  reportsTo        String?
+  notes            String?
+  priorities       String?   // JSON array
+  objections       String?   // JSON array
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id])
+  deal    Deal    @relation(fields: [dealId], references: [id])
+}
+
+// ─── Activities ──────────────────────────────────────────────
+
+model Activity {
+  id                   String    @id
+  dealId               String
+  accountId            String
+  stakeholderId        String?
+  type                 String
+  direction            String?
+  subject              String
+  summary              String
+  sentiment            Float?
+  keyInsights          String?   // JSON array
+  actionItems          String?   // JSON array
+  buyingSignals        String?   // JSON array
+  competitorsMentioned String?   // JSON array
+  duration             Int?
+  outcome              String?
+  talkRatio            Float?
+  emailOpened          Boolean?
+  emailReplied         Boolean?
+  fromStage            String?
+  toStage              String?
+  occurredAt           DateTime
+  createdAt            DateTime  @default(now())
+
+  deal Deal @relation(fields: [dealId], references: [id])
+}
+
+// ─── Risk Factors ────────────────────────────────────────────
+
+model RiskFactor {
+  id               String   @id
+  dealId           String
+  category         String
+  description      String
+  severity         String
+  detectedAt       DateTime
+  mitigationAction String?
+  isResolved       Boolean  @default(false)
+
+  deal Deal @relation(fields: [dealId], references: [id])
+}
+
+// ─── Competitor Intel ────────────────────────────────────────
+
+model CompetitorIntel {
+  id                   String    @id @default(cuid())
+  dealId               String
+  competitorName       String
+  threatLevel          String
+  strengths            String    @default("[]") // JSON
+  weaknesses           String    @default("[]") // JSON
+  ourAdvantages        String    @default("[]") // JSON
+  keyDifferentiators   String    @default("[]") // JSON
+  objectionHandlers    String    @default("[]") // JSON
+  incumbentProduct     String?
+  relationshipStrength String?
+  lastMentionedAt      DateTime?
+  mentionedBy          String?
+
+  deal Deal @relation(fields: [dealId], references: [id])
+}
+
+// ─── Next Best Actions ───────────────────────────────────────
+
+model NextBestAction {
+  id                  String    @id
+  dealId              String
+  type                String
+  priority            String
+  title               String
+  description         String
+  aiReasoning         String
+  targetStakeholderId String?
+  dueDate             DateTime?
+  isCompleted         Boolean   @default(false)
+  completedAt         DateTime?
+  createdAt           DateTime  @default(now())
+
+  deal Deal @relation(fields: [dealId], references: [id])
+}
+
+// ─── Notifications ───────────────────────────────────────────
+
+model Notification {
+  id            String   @id
+  type          String
+  severity      String
+  title         String
+  message       String
+  dealId        String?
+  accountId     String?
+  stakeholderId String?
+  actionUrl     String?
+  read          Boolean  @default(false)
+  createdAt     DateTime @default(now())
+}
+
+// ─── Virtual Assistant / Inbound Leads ───────────────────────
+
+model InboundLead {
+  id            String    @id
+  // Source
+  source        String
+  sourceDetail  String?
+  // Contact
+  firstName     String
+  lastName      String
+  email         String
+  phone         String?
+  company       String
+  title         String?
+  industry      String?
+  employeeCount Int?
+  website       String?
+  // Lead info
+  message       String?
+  productInterest String?
+  region        String?
+  // AI Processing
+  aiScore             Int?
+  aiScoreFactors      String?   // JSON array
+  aiSummary           String?
+  aiQualified         Boolean   @default(false)
+  // Auto Response
+  autoResponseSent    Boolean   @default(false)
+  autoResponseAt      DateTime?
+  autoResponseContent String?
+  responseTimeMs      Int?
+  // Status
+  status              String    @default("new")
+  assignedSdrId       String?
+  assignedAeId        String?
+  // Conversion
+  convertedAccountId  String?
+  convertedDealId     String?
+  // Timestamps
+  receivedAt          DateTime  @default(now())
+  qualifiedAt         DateTime?
+  convertedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  account       Account?       @relation(fields: [convertedAccountId], references: [id])
+  autoResponses AutoResponse[]
+}
+
+model AutoResponse {
+  id              String    @id @default(cuid())
+  inboundLeadId   String
+  subject         String
+  body            String
+  personalization String?   // JSON
+  channel         String
+  sentAt          DateTime?
+  opened          Boolean   @default(false)
+  replied         Boolean   @default(false)
+  confidence      Float?
+  model           String?
+
+  inboundLead InboundLead @relation(fields: [inboundLeadId], references: [id])
+}

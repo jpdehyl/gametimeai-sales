@@ -6,8 +6,7 @@
 // ============================================================
 
 import { Router, Request, Response } from 'express';
-import { store } from '../store';
-import { Notification } from '../types';
+import { db } from '../db';
 
 const router = Router();
 
@@ -17,15 +16,13 @@ const router = Router();
  * deals at risk, AI-recommended actions, recent activities,
  * forecast numbers, and notifications.
  */
-router.get('/', (req: Request, res: Response) => {
-  const dashboard = store.getDashboardData();
-  const deals = store.getDeals();
-  const recentActivities = store.getRecentActivities(10);
-  const notifications = Array.from(store.notifications.values())
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-    .slice(0, 10);
+router.get('/', async (req: Request, res: Response) => {
+  const deals = await db.getDeals();
+  const recentActivities = await db.getRecentActivities(10);
+  const notifications = await db.getNotifications();
+  const user = await db.getCurrentUser();
 
-  // Pipeline summary by stage — build detailed version with dealIds
+  // Pipeline summary by stage
   const pipelineByStage: Record<string, { count: number; totalValue: number; dealIds: string[] }> = {};
   for (const deal of deals) {
     if (!pipelineByStage[deal.stage]) {
@@ -37,25 +34,30 @@ router.get('/', (req: Request, res: Response) => {
   }
 
   // Deals at risk — low health score or stalled
-  const dealsAtRisk = deals
-    .filter((d) => d.healthScore < 60 && d.stage !== 'closed_won' && d.stage !== 'closed_lost')
-    .sort((a, b) => a.healthScore - b.healthScore)
-    .slice(0, 5)
-    .map((d) => ({
-      id: d.id,
-      name: d.name,
-      accountName: store.getAccountById(d.accountId)?.name || 'Unknown',
-      amount: d.value,
-      stage: d.stage,
-      healthScore: d.healthScore,
-      riskFactors: d.riskFactors,
-      closeDate: d.closeDate,
-      daysUntilClose: Math.ceil(
-        (new Date(d.closeDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-      ),
-    }));
+  const dealsAtRisk = await Promise.all(
+    deals
+      .filter((d) => d.healthScore < 60 && d.stage !== 'closed_won' && d.stage !== 'closed_lost')
+      .sort((a, b) => a.healthScore - b.healthScore)
+      .slice(0, 5)
+      .map(async (d) => {
+        const account = await db.getAccountById(d.accountId);
+        return {
+          id: d.id,
+          name: d.name,
+          accountName: account?.name || 'Unknown',
+          amount: d.value,
+          stage: d.stage,
+          healthScore: d.healthScore,
+          riskFactors: d.riskFactors,
+          closeDate: d.closeDate,
+          daysUntilClose: Math.ceil(
+            (new Date(d.closeDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+          ),
+        };
+      })
+  );
 
-  // Today's AI-recommended actions — aggregated from all active deals
+  // Today's AI-recommended actions
   const recommendedActions: Array<{
     dealId: string;
     dealName: string;
@@ -68,12 +70,13 @@ router.get('/', (req: Request, res: Response) => {
 
   for (const deal of deals) {
     if (deal.stage === 'closed_won' || deal.stage === 'closed_lost') continue;
+    const account = await db.getAccountById(deal.accountId);
     for (const action of deal.nextBestActions || []) {
       if (!action.isCompleted) {
         recommendedActions.push({
           dealId: deal.id,
           dealName: deal.name,
-          accountName: store.getAccountById(deal.accountId)?.name || 'Unknown',
+          accountName: account?.name || 'Unknown',
           actionId: action.id,
           action: action.description,
           priority: action.priority,
@@ -83,7 +86,6 @@ router.get('/', (req: Request, res: Response) => {
     }
   }
 
-  // Sort actions by priority (high > medium > low) then by due date
   const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   recommendedActions.sort((a, b) => {
     const pDiff = (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3);
@@ -92,7 +94,7 @@ router.get('/', (req: Request, res: Response) => {
     return 0;
   });
 
-  // Quota and forecast — use getDashboardData() for quota
+  // Quota and forecast
   const totalPipelineValue = deals
     .filter((d) => d.stage !== 'closed_won' && d.stage !== 'closed_lost')
     .reduce((sum, d) => sum + d.value, 0);
@@ -105,41 +107,47 @@ router.get('/', (req: Request, res: Response) => {
     .filter((d) => d.stage !== 'closed_won' && d.stage !== 'closed_lost')
     .reduce((sum, d) => sum + d.value * (d.probability / 100), 0);
 
-  const quota = dashboard.quotaAttainment.quota;
+  const quota = user.quota || 1500000;
+  const closedWon = user.closedWonYTD || closedWonValue;
+
+  // Activity results with deal names
+  const activityResults = await Promise.all(
+    recentActivities.map(async (a) => {
+      const deal = await db.getDealById(a.dealId);
+      return {
+        id: a.id,
+        type: a.type,
+        description: a.summary,
+        dealId: a.dealId,
+        dealName: deal?.name || 'Unknown',
+        timestamp: a.occurredAt,
+      };
+    })
+  );
 
   res.json({
     data: {
       quotaAttainment: {
         quota,
-        closed: closedWonValue,
-        attainmentPercent: Math.round((closedWonValue / quota) * 100),
-        remaining: quota - closedWonValue,
+        closed: closedWon,
+        attainmentPercent: Math.round((closedWon / quota) * 100),
+        remaining: quota - closedWon,
         pipelineCoverage: totalPipelineValue > 0
-          ? Math.round((totalPipelineValue / (quota - closedWonValue)) * 100) / 100
+          ? Math.round((totalPipelineValue / (quota - closedWon)) * 100) / 100
           : 0,
       },
       forecast: {
-        bestCase: closedWonValue + totalPipelineValue,
-        commit: closedWonValue + weightedPipeline,
+        bestCase: closedWon + totalPipelineValue,
+        commit: closedWon + weightedPipeline,
         weighted: Math.round(weightedPipeline),
         totalPipeline: totalPipelineValue,
-        closedWon: closedWonValue,
+        closedWon,
       },
       pipelineSummary: pipelineByStage,
       dealsAtRisk,
       recommendedActions: recommendedActions.slice(0, 10),
-      recentActivities: recentActivities.map((a) => {
-        const deal = store.getDealById(a.dealId);
-        return {
-          id: a.id,
-          type: a.type,
-          description: a.summary,
-          dealId: a.dealId,
-          dealName: deal?.name || 'Unknown',
-          timestamp: a.occurredAt,
-        };
-      }),
-      notifications: notifications.map((n) => ({
+      recentActivities: activityResults,
+      notifications: notifications.slice(0, 10).map((n) => ({
         id: n.id,
         type: n.type,
         title: n.title,
@@ -158,9 +166,8 @@ router.get('/', (req: Request, res: Response) => {
  * GET /api/v1/dashboard/notifications
  * Full notification feed.
  */
-router.get('/notifications', (req: Request, res: Response) => {
-  const notifications = Array.from(store.notifications.values())
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+router.get('/notifications', async (req: Request, res: Response) => {
+  const notifications = await db.getNotifications();
 
   res.json({
     data: notifications.map((n) => ({
@@ -180,8 +187,8 @@ router.get('/notifications', (req: Request, res: Response) => {
  * PATCH /api/v1/dashboard/notifications/:id
  * Mark notification as read.
  */
-router.patch('/notifications/:id', (req: Request<{ id: string }>, res: Response) => {
-  const notification = store.notifications.get(req.params.id);
+router.patch('/notifications/:id', async (req: Request<{ id: string }>, res: Response) => {
+  const notification = await db.getNotificationById(req.params.id);
 
   if (!notification) {
     return res.status(404).json({
@@ -191,8 +198,7 @@ router.patch('/notifications/:id', (req: Request<{ id: string }>, res: Response)
     });
   }
 
-  notification.read = true;
-  store.notifications.set(notification.id, notification);
+  await db.markNotificationRead(req.params.id);
 
   res.json({ data: { id: notification.id, read: true } });
 });

@@ -5,7 +5,7 @@
 // ============================================================
 
 import { Router, Request, Response } from 'express';
-import { store } from '../store';
+import { db } from '../db';
 import { aiService } from '../services/ai.service';
 import { logger } from '../utils/logger';
 
@@ -16,62 +16,46 @@ const router = Router();
  */
 function deriveEngagementLevel(freq: string): 'high' | 'medium' | 'low' {
   switch (freq) {
-    case 'weekly':
-      return 'high';
-    case 'biweekly':
-      return 'high';
-    case 'monthly':
-      return 'medium';
-    case 'quarterly':
-      return 'low';
-    case 'never':
-      return 'low';
-    default:
-      return 'medium';
+    case 'weekly': return 'high';
+    case 'biweekly': return 'high';
+    case 'monthly': return 'medium';
+    case 'quarterly': return 'low';
+    case 'never': return 'low';
+    default: return 'medium';
   }
 }
 
 /**
  * POST /api/v1/outreach/generate
  * Generate AI-powered outreach emails for a stakeholder on a specific deal.
- * AE-focused: requires dealId and stakeholderId instead of generic leadId.
  */
 router.post('/generate', async (req: Request, res: Response) => {
   const {
-    dealId,
-    stakeholderId,
-    emailType = 'follow_up',
-    variants = 3,
-    tone = 'professional_casual',
-    context,
+    dealId, stakeholderId,
+    emailType = 'follow_up', variants = 3,
+    tone = 'professional_casual', context,
   } = req.body;
 
   if (!dealId) {
     return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: 'dealId is required',
-      statusCode: 400,
+      error: 'VALIDATION_ERROR', message: 'dealId is required', statusCode: 400,
     });
   }
 
   if (!stakeholderId) {
     return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: 'stakeholderId is required',
-      statusCode: 400,
+      error: 'VALIDATION_ERROR', message: 'stakeholderId is required', statusCode: 400,
     });
   }
 
-  const deal = store.getDealById(dealId);
+  const deal = await db.getDealById(dealId);
   if (!deal) {
     return res.status(404).json({
-      error: 'NOT_FOUND',
-      message: `Deal ${dealId} not found`,
-      statusCode: 404,
+      error: 'NOT_FOUND', message: `Deal ${dealId} not found`, statusCode: 404,
     });
   }
 
-  const stakeholders = store.getStakeholdersForDeal(dealId);
+  const stakeholders = await db.getStakeholdersForDeal(dealId);
   const stakeholder = stakeholders.find((s) => s.id === stakeholderId);
 
   if (!stakeholder) {
@@ -82,11 +66,10 @@ router.post('/generate', async (req: Request, res: Response) => {
     });
   }
 
-  const account = store.getAccountById(deal.accountId);
-  const activities = store.getActivitiesForDeal(dealId);
+  const account = await db.getAccountById(deal.accountId);
+  const activities = await db.getActivitiesForDeal(dealId);
 
   try {
-    // Build rich context for AI generation
     const generationContext = {
       deal: {
         name: deal.name,
@@ -115,10 +98,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     };
 
     const emailVariants = await aiService.generateOutreach(
-      generationContext,
-      emailType,
-      Math.min(variants, 5),
-      tone
+      generationContext, emailType, Math.min(variants, 5), tone
     );
 
     res.json({
@@ -149,11 +129,9 @@ router.post('/generate', async (req: Request, res: Response) => {
 /**
  * POST /api/v1/deals/:id/meeting-prep
  * Generate AI-powered meeting preparation for a deal.
- * Includes: stakeholder briefing, talking points, objection handling,
- * competitive positioning, and recommended agenda.
  */
-router.post('/deals/:id/meeting-prep', (req: Request<{ id: string }>, res: Response) => {
-  const deal = store.getDealById(req.params.id);
+router.post('/deals/:id/meeting-prep', async (req: Request<{ id: string }>, res: Response) => {
+  const deal = await db.getDealById(req.params.id);
 
   if (!deal) {
     return res.status(404).json({
@@ -165,17 +143,15 @@ router.post('/deals/:id/meeting-prep', (req: Request<{ id: string }>, res: Respo
 
   const { meetingType = 'general', attendeeIds } = req.body;
 
-  const account = store.getAccountById(deal.accountId);
+  const account = await db.getAccountById(deal.accountId);
   const accountName = account?.name || 'Unknown';
-  const allStakeholders = store.getStakeholdersForDeal(deal.id);
-  const activities = store.getActivitiesForDeal(deal.id);
+  const allStakeholders = await db.getStakeholdersForDeal(deal.id);
+  const activities = await db.getActivitiesForDeal(deal.id);
 
-  // Filter to specific attendees if provided
   const attendees = attendeeIds && attendeeIds.length > 0
     ? allStakeholders.filter((s) => attendeeIds.includes(s.id))
     : allStakeholders;
 
-  // Build stakeholder briefings
   const stakeholderBriefings = attendees.map((s) => {
     const engagement = deriveEngagementLevel(s.contactFrequency);
     const primaryRole = s.roles[0] || 'unknown';
@@ -201,13 +177,11 @@ router.post('/deals/:id/meeting-prep', (req: Request<{ id: string }>, res: Respo
     };
   });
 
-  // Competitive positioning — deal.competitors is CompetitorIntel[]
   const competitors = deal.competitors || [];
   const competitorNames = competitors.map((c) => c.competitorName);
   const ourStrengths = competitors.flatMap((c) => c.ourAdvantages);
   const landmines = competitors.flatMap((c) => c.weaknesses);
 
-  // Build objection handling based on MEDDIC gaps (scores below 5)
   const meddic = deal.meddic;
   const meddicGaps: string[] = [];
   if (meddic.metrics.score < 5) meddicGaps.push('Metrics: No quantified business impact identified yet — probe for ROI data');
@@ -217,7 +191,6 @@ router.post('/deals/:id/meeting-prep', (req: Request<{ id: string }>, res: Respo
   if (meddic.identifyPain.score < 5) meddicGaps.push('Pain: Not validated — confirm business pain points');
   if (meddic.champion.score < 5) meddicGaps.push('Champion: No internal champion identified — cultivate one');
 
-  // Risk-based recommendations — riskFactors is RiskFactor[] (objects with .description)
   const riskFactors = deal.riskFactors || [];
   const riskMitigations = riskFactors.map((risk) => ({
     risk: risk.description,
@@ -225,7 +198,6 @@ router.post('/deals/:id/meeting-prep', (req: Request<{ id: string }>, res: Respo
     mitigation: risk.mitigationAction || `Address "${risk.description}" directly in the meeting — prepare supporting evidence`,
   }));
 
-  // Suggested agenda based on meeting type
   const agendaTemplates: Record<string, string[]> = {
     discovery: [
       'Introductions and rapport building (5 min)',

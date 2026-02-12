@@ -18,6 +18,7 @@ import accountsRouter from './routes/accounts.routes';
 import outreachRouter from './routes/outreach.routes';
 import callsRouter, { webhookRouter } from './routes/calls.routes';
 import dashboardRouter from './routes/dashboard.routes';
+import leadsRouter from './routes/leads.routes';
 
 const app = express();
 const httpServer = createServer(app);
@@ -58,6 +59,7 @@ app.use('/api/v1/outreach', outreachRouter);
 app.use('/api/v1/calls', callsRouter);
 app.use('/api/v1/webhooks', webhookRouter);
 app.use('/api/v1/dashboard', dashboardRouter);
+app.use('/api/v1/leads', leadsRouter);
 
 // WebSocket connection handling
 io.on('connection', (socket) => {

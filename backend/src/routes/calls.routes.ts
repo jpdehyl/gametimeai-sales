@@ -6,7 +6,7 @@
 // ============================================================
 
 import { Router, Request, Response } from 'express';
-import { store } from '../store';
+import { db } from '../db';
 import { zoomService } from '../services/zoom.service';
 import { logger } from '../utils/logger';
 
@@ -25,36 +25,32 @@ function sentimentLabel(score: number | undefined): 'positive' | 'neutral' | 'ne
 /**
  * GET /api/v1/calls
  * List recent calls with deal and account context.
- * Supports filtering by dealId or accountId.
  */
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 20;
   const dealId = req.query.dealId as string;
   const accountId = req.query.accountId as string;
 
-  // Calls are Activity objects with type === 'call'
-  let calls = store
-    .getRecentActivities(limit * 3) // over-fetch to have enough after filtering
+  let calls = (await db.getRecentActivities(limit * 3))
     .filter((a) => a.type === 'call');
 
-  // Filter by dealId if provided
   if (dealId) {
     calls = calls.filter((c) => c.dealId === dealId);
   }
 
-  // Filter by accountId if provided
   if (accountId) {
     calls = calls.filter((c) => c.accountId === accountId);
   }
 
-  // Apply the requested limit
   calls = calls.slice(0, limit);
 
-  res.json({
-    data: calls.map((call) => {
-      const deal = call.dealId ? store.getDealById(call.dealId) : undefined;
-      const account = call.accountId ? store.getAccountById(call.accountId) : undefined;
-      const stakeholder = call.stakeholderId ? store.getStakeholderById(call.stakeholderId) : undefined;
+  const callResults = await Promise.all(
+    calls.map(async (call) => {
+      const deal = call.dealId ? await db.getDealById(call.dealId) : undefined;
+      const account = call.accountId ? await db.getAccountById(call.accountId) : undefined;
+      const stakeholder = call.stakeholderId
+        ? await db.getStakeholderById(call.stakeholderId)
+        : undefined;
 
       return {
         id: call.id,
@@ -68,10 +64,12 @@ router.get('/', (req: Request, res: Response) => {
         summary: call.summary,
         callDate: call.occurredAt,
         actionItemCount: call.actionItems?.length || 0,
-        coachingTipCount: 0, // PoC — coaching tips not yet implemented
+        coachingTipCount: 0,
       };
-    }),
-  });
+    })
+  );
+
+  res.json({ data: callResults });
 });
 
 /**
@@ -79,8 +77,8 @@ router.get('/', (req: Request, res: Response) => {
  * Full call detail with transcript analysis, key moments,
  * coaching tips, and deal/account context.
  */
-router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
-  const call = store.activities.get(req.params.id);
+router.get('/:id', async (req: Request<{ id: string }>, res: Response) => {
+  const call = await db.getActivityById(req.params.id);
 
   if (!call || call.type !== 'call') {
     return res.status(404).json({
@@ -90,9 +88,11 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
     });
   }
 
-  const deal = call.dealId ? store.getDealById(call.dealId) : undefined;
-  const account = call.accountId ? store.getAccountById(call.accountId) : undefined;
-  const stakeholder = call.stakeholderId ? store.getStakeholderById(call.stakeholderId) : undefined;
+  const deal = call.dealId ? await db.getDealById(call.dealId) : undefined;
+  const account = call.accountId ? await db.getAccountById(call.accountId) : undefined;
+  const stakeholder = call.stakeholderId
+    ? await db.getStakeholderById(call.stakeholderId)
+    : undefined;
 
   res.json({
     data: {
@@ -150,7 +150,6 @@ export const webhookRouter = Router();
 webhookRouter.post('/zra', async (req: Request, res: Response) => {
   logger.info('Received ZRA webhook', { event: req.body.event });
 
-  // Validate webhook signature (in production)
   const signature = req.headers['x-zm-signature'] as string;
   if (signature && !zoomService.validateWebhookSignature(JSON.stringify(req.body), signature)) {
     return res.status(401).json({
@@ -163,7 +162,6 @@ webhookRouter.post('/zra', async (req: Request, res: Response) => {
   const { event, callId, transcript_url, duration, participants, direction, dealId, accountId } = req.body;
 
   if (event !== 'call.completed') {
-    // Acknowledge non-call events
     return res.status(200).json({ received: true });
   }
 
@@ -177,17 +175,12 @@ webhookRouter.post('/zra', async (req: Request, res: Response) => {
 
   try {
     const result = await zoomService.processCallWebhook({
-      event,
-      callId,
-      transcript_url,
+      event, callId, transcript_url,
       duration: duration || 0,
       participants: participants || [],
-      direction,
-      dealId,
-      accountId,
+      direction, dealId, accountId,
     });
 
-    // Return 202 Accepted — analysis runs async
     res.status(202).json({
       analysisId: result.analysisId,
       status: result.status,
