@@ -1,5 +1,5 @@
 // ============================================================
-// Call Review Page — Post-call analysis view (US-005)
+// Call Review Page — Post-call analysis with deal context
 // Shows: transcript key moments, AI summary, action items, coaching tips
 // ============================================================
 
@@ -19,6 +19,7 @@ import {
   Lightbulb,
   BarChart3,
   User,
+  ExternalLink,
 } from 'lucide-react';
 import { cn, formatDuration, formatRelativeTime, getSentimentLabel } from '@/lib/utils';
 
@@ -57,7 +58,9 @@ export default function CallDetailPage() {
   }
 
   const call = data.data;
-  const sentiment = getSentimentLabel(call.sentimentScore);
+  const sentiment = getSentimentLabel(
+    call.sentiment === 'positive' ? 0.7 : call.sentiment === 'negative' ? -0.7 : 0
+  );
 
   return (
     <div className="space-y-6">
@@ -67,24 +70,62 @@ export default function CallDetailPage() {
           <ArrowLeft className="w-5 h-5 text-gray-500" />
         </Link>
         <div className="flex-1">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-xl font-bold text-gray-900">
-              Call with {call.lead?.displayName || 'Unknown'}
+              Call: {call.stakeholder?.name || 'Unknown Contact'}
             </h1>
             <span className={cn(
               'status-badge',
-              call.outcome === 'connected' ? 'bg-green-100 text-green-800' :
-              call.outcome === 'voicemail' ? 'bg-yellow-100 text-yellow-800' :
-              'bg-gray-100 text-gray-800'
+              call.direction === 'outbound' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
             )}>
-              {call.outcome}
+              {call.direction}
             </span>
           </div>
-          <p className="text-sm text-gray-500 mt-1">
-            {call.lead?.title} at {call.lead?.company} &middot; {formatRelativeTime(call.callDate)}
-          </p>
+          <div className="flex items-center gap-3 mt-1 text-sm text-gray-500 flex-wrap">
+            {call.stakeholder && (
+              <span>{call.stakeholder.title} ({call.stakeholder.role?.replace(/_/g, ' ')})</span>
+            )}
+            <span>&middot;</span>
+            <span>{formatRelativeTime(call.callDate)}</span>
+            {call.deal && (
+              <>
+                <span>&middot;</span>
+                <Link
+                  href={`/deals/${call.deal.id}`}
+                  className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium"
+                >
+                  {call.deal.name}
+                  <ExternalLink className="w-3 h-3" />
+                </Link>
+                <span className="text-gray-400">({call.deal.accountName})</span>
+              </>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Deal context banner */}
+      {call.deal && (
+        <Link
+          href={`/deals/${call.deal.id}`}
+          className="block card card-body hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-primary-100 flex items-center justify-center">
+                <TrendingUp className="w-4 h-4 text-primary-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Deal Room: {call.deal.name}</p>
+                <p className="text-xs text-gray-500">
+                  {call.deal.accountName} &middot; Stage: {call.deal.stage?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+                </p>
+              </div>
+            </div>
+            <ExternalLink className="w-4 h-4 text-gray-400" />
+          </div>
+        </Link>
+      )}
 
       {/* Call metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -103,7 +144,7 @@ export default function CallDetailPage() {
           </p>
         </div>
         <div className="card card-body">
-          <p className="text-xs text-gray-500 uppercase">Talk Ratio (SDR)</p>
+          <p className="text-xs text-gray-500 uppercase">Talk Ratio (AE)</p>
           <p className="text-lg font-bold text-gray-900 flex items-center gap-2">
             <User className="w-4 h-4 text-gray-400" />
             {Math.round(call.talkRatio * 100)}%

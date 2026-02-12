@@ -3,9 +3,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import {
   LayoutDashboard,
-  Users,
+  GitBranch,
+  Building2,
   Phone,
-  Mail,
   BarChart3,
   Bell,
   Settings,
@@ -21,9 +21,9 @@ interface LayoutProps {
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Leads', href: '/leads', icon: Users },
+  { name: 'Pipeline', href: '/deals', icon: GitBranch },
+  { name: 'Accounts', href: '/accounts', icon: Building2 },
   { name: 'Calls', href: '/calls', icon: Phone },
-  { name: 'Outreach', href: '/outreach', icon: Mail },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
 ];
 
@@ -93,11 +93,11 @@ export default function Layout({ children }: LayoutProps) {
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-primary-800">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-primary-700 rounded-full flex items-center justify-center">
-              <span className="text-sm font-medium text-white">AJ</span>
+              <span className="text-sm font-medium text-white">MR</span>
             </div>
             <div>
-              <p className="text-sm font-medium text-white">Alex Johnson</p>
-              <p className="text-xs text-primary-400">SDR</p>
+              <p className="text-sm font-medium text-white">Marcus Rodriguez</p>
+              <p className="text-xs text-primary-400">Account Executive</p>
             </div>
           </div>
         </div>

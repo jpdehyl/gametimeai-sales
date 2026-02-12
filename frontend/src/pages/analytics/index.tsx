@@ -1,5 +1,5 @@
 // ============================================================
-// Analytics Page — Phase 3 placeholder with pipeline overview
+// Analytics Page — Phase 3 placeholder with AE revenue metrics
 // ============================================================
 
 import { useQuery } from '@tanstack/react-query';
@@ -7,13 +7,14 @@ import { fetchDashboard } from '@/lib/api';
 import {
   BarChart3,
   TrendingUp,
-  Users,
-  Phone,
-  Mail,
-  Clock,
+  DollarSign,
   Target,
+  Clock,
+  Gauge,
+  ArrowUpRight,
+  Activity,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 
 export default function AnalyticsPage() {
   const { data } = useQuery({
@@ -21,33 +22,98 @@ export default function AnalyticsPage() {
     queryFn: fetchDashboard,
   });
 
-  const pipeline = data?.data?.pipelineSnapshot;
+  const dashboard = data?.data;
+  const pipeline = dashboard?.pipelineSummary;
+  const quota = dashboard?.quotaAttainment;
 
   return (
     <div className="space-y-6">
       <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
         <p className="text-sm text-amber-800">
-          <strong>Phase 3 Preview:</strong> Full analytics with ROI metrics, before/after comparisons,
-          and PDF report generation will be available after Phase 1 PoC data collection.
+          <strong>Phase 3 Preview:</strong> Full analytics with revenue impact, deal velocity trends,
+          win/loss analysis, and executive PDF report generation will be available after Phase 1 PoC
+          data collection.
         </p>
       </div>
 
-      {/* Pipeline funnel */}
+      {/* Quota tracking */}
+      {quota && (
+        <div className="card">
+          <div className="card-header">
+            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <Target className="w-4 h-4" />
+              Quota Tracking
+            </h3>
+          </div>
+          <div className="card-body">
+            <div className="grid sm:grid-cols-3 gap-6">
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">Quota</p>
+                <p className="text-2xl font-bold text-gray-900">{formatCurrency(quota.quota)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">Closed Won</p>
+                <p className="text-2xl font-bold text-green-700">{formatCurrency(quota.closedWon)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">Attainment</p>
+                <p className="text-2xl font-bold text-primary-700">{quota.percentAttained}%</p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-gray-500">Progress to quota</span>
+                <span className="text-xs font-medium text-gray-700">{quota.percentAttained}%</span>
+              </div>
+              <div className="w-full bg-gray-100 rounded-full h-3">
+                <div
+                  className={cn(
+                    'h-3 rounded-full transition-all',
+                    quota.percentAttained >= 100
+                      ? 'bg-green-500'
+                      : quota.percentAttained >= 75
+                      ? 'bg-blue-500'
+                      : quota.percentAttained >= 50
+                      ? 'bg-yellow-500'
+                      : 'bg-red-500'
+                  )}
+                  style={{ width: `${Math.min(quota.percentAttained, 100)}%` }}
+                />
+              </div>
+              {quota.gap > 0 && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Gap to close: <span className="font-semibold text-gray-700">{formatCurrency(quota.gap)}</span>
+                  {' '}&middot; Weighted pipeline: {formatCurrency(quota.pipelineWeighted)}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pipeline health overview */}
       {pipeline && (
         <div className="card">
           <div className="card-header">
             <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
-              Pipeline Overview
+              Pipeline Health
             </h3>
           </div>
           <div className="card-body">
             <div className="space-y-4">
-              <FunnelBar label="Total Leads" value={pipeline.totalLeads} max={pipeline.totalLeads} color="bg-blue-500" />
-              <FunnelBar label="New" value={pipeline.newLeads} max={pipeline.totalLeads} color="bg-green-500" />
-              <FunnelBar label="Contacted" value={pipeline.contacted} max={pipeline.totalLeads} color="bg-yellow-500" />
-              <FunnelBar label="Engaged" value={pipeline.engaged} max={pipeline.totalLeads} color="bg-purple-500" />
-              <FunnelBar label="Qualified" value={pipeline.qualified} max={pipeline.totalLeads} color="bg-indigo-500" />
+              {pipeline.byStage
+                .filter((s) => s.stage !== 'closed_won' && s.stage !== 'closed_lost')
+                .map((stage) => (
+                  <FunnelBar
+                    key={stage.stage}
+                    label={stage.label}
+                    value={stage.value}
+                    count={stage.count}
+                    max={pipeline.totalValue}
+                    color={getStageColor(stage.stage)}
+                  />
+                ))}
             </div>
           </div>
         </div>
@@ -55,25 +121,45 @@ export default function AnalyticsPage() {
 
       {/* Placeholder metric cards */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <PlaceholderMetric icon={Phone} label="Calls This Week" value="--" note="Tracking starts after PoC" />
-        <PlaceholderMetric icon={Mail} label="Emails Sent" value="--" note="AI-assisted vs manual" />
-        <PlaceholderMetric icon={Target} label="Meetings Booked" value="--" note="Conversion tracking" />
-        <PlaceholderMetric icon={Clock} label="Avg Response Time" value="--" note="Time-to-first-call" />
+        <PlaceholderMetric
+          icon={Gauge}
+          label="Deal Velocity"
+          value="--"
+          note="Avg days from discovery to close"
+        />
+        <PlaceholderMetric
+          icon={ArrowUpRight}
+          label="Win Rate"
+          value="--"
+          note="Closed won vs total closed"
+        />
+        <PlaceholderMetric
+          icon={DollarSign}
+          label="Avg Deal Size"
+          value={pipeline ? formatCurrency(pipeline.averageDealSize) : '--'}
+          note="Average opportunity value"
+        />
+        <PlaceholderMetric
+          icon={Clock}
+          label="Avg Sales Cycle"
+          value={pipeline ? `${pipeline.averageSalesCycle}d` : '--'}
+          note="Discovery to close average"
+        />
       </div>
 
       <div className="grid sm:grid-cols-2 gap-6">
         <div className="card card-body text-center py-12">
           <TrendingUp className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <h4 className="text-sm font-semibold text-gray-700">AI Impact Report</h4>
+          <h4 className="text-sm font-semibold text-gray-700">Revenue Impact Report</h4>
           <p className="text-xs text-gray-500 mt-1">
-            Before/after comparison charts will appear after 30 days of data collection
+            AI-assisted deal analysis and revenue attribution will appear after 30 days of data collection
           </p>
         </div>
         <div className="card card-body text-center py-12">
-          <Users className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <h4 className="text-sm font-semibold text-gray-700">Team Performance</h4>
+          <Activity className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+          <h4 className="text-sm font-semibold text-gray-700">Pipeline Health Trends</h4>
           <p className="text-xs text-gray-500 mt-1">
-            SDR activity leaderboard and coaching metrics (Manager view)
+            Stage conversion rates, pipeline velocity, and deal aging analysis
           </p>
         </div>
       </div>
@@ -81,13 +167,39 @@ export default function AnalyticsPage() {
   );
 }
 
-function FunnelBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
+function getStageColor(stage: string): string {
+  const colors: Record<string, string> = {
+    discovery: 'bg-sky-500',
+    qualification: 'bg-blue-500',
+    technical_evaluation: 'bg-indigo-500',
+    proposal: 'bg-violet-500',
+    negotiation: 'bg-purple-500',
+  };
+  return colors[stage] || 'bg-gray-400';
+}
+
+function FunnelBar({
+  label,
+  value,
+  count,
+  max,
+  color,
+}: {
+  label: string;
+  value: number;
+  count: number;
+  max: number;
+  color: string;
+}) {
   const pct = max > 0 ? (value / max) * 100 : 0;
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <span className="text-sm font-medium text-gray-700">{label}</span>
-        <span className="text-sm font-bold text-gray-900">{value}</span>
+        <span className="text-sm font-medium text-gray-700">
+          {label}{' '}
+          <span className="text-xs text-gray-400">({count} deals)</span>
+        </span>
+        <span className="text-sm font-bold text-gray-900">{formatCurrency(value)}</span>
       </div>
       <div className="w-full bg-gray-100 rounded-full h-3">
         <div className={cn('h-3 rounded-full transition-all', color)} style={{ width: `${pct}%` }} />
@@ -114,7 +226,7 @@ function PlaceholderMetric({
           <Icon className="w-5 h-5 text-gray-400" />
         </div>
         <div>
-          <p className="text-2xl font-bold text-gray-300">{value}</p>
+          <p className={cn('text-2xl font-bold', value === '--' ? 'text-gray-300' : 'text-gray-900')}>{value}</p>
           <p className="text-xs text-gray-500">{label}</p>
         </div>
       </div>

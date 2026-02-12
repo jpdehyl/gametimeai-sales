@@ -49,14 +49,22 @@ export function formatCurrency(amount: number): string {
 }
 
 // ============================================================
+// Full Currency Formatting (non-abbreviated)
+// ============================================================
+
+export function formatCurrencyFull(amount: number): string {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }).format(amount);
+}
+
+// ============================================================
 // Health Score Colors
 // ============================================================
 
-export function getHealthScoreColor(score: number): string {
-  if (score >= 80) return 'text-green-600';
-  if (score >= 60) return 'text-yellow-600';
-  if (score >= 40) return 'text-orange-500';
-  return 'text-red-500';
+export function getHealthScoreColor(score: number): { text: string; bg: string; fill: string; label: string } {
+  if (score >= 80) return { text: 'text-green-600', bg: 'bg-green-100', fill: 'bg-green-500', label: 'Strong' };
+  if (score >= 60) return { text: 'text-yellow-600', bg: 'bg-yellow-100', fill: 'bg-yellow-500', label: 'Fair' };
+  if (score >= 40) return { text: 'text-orange-500', bg: 'bg-orange-100', fill: 'bg-orange-500', label: 'At Risk' };
+  return { text: 'text-red-500', bg: 'bg-red-100', fill: 'bg-red-500', label: 'Critical' };
 }
 
 export function getHealthScoreBg(score: number): string {
@@ -114,6 +122,16 @@ export function getRoleBadgeColor(role: StakeholderRole): string {
     default:
       return 'bg-gray-100 text-gray-800';
   }
+}
+
+// ============================================================
+// Sentiment Label (numeric score)
+// ============================================================
+
+export function getSentimentLabel(score: number): { label: string; color: string } {
+  if (score > 0.3) return { label: 'Positive', color: 'text-green-600' };
+  if (score < -0.3) return { label: 'Negative', color: 'text-red-500' };
+  return { label: 'Neutral', color: 'text-gray-500' };
 }
 
 // ============================================================

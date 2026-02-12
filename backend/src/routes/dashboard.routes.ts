@@ -25,14 +25,14 @@ router.get('/', (req: Request, res: Response) => {
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
     .slice(0, 10);
 
-  // Pipeline summary by stage
+  // Pipeline summary by stage — build detailed version with dealIds
   const pipelineByStage: Record<string, { count: number; totalValue: number; dealIds: string[] }> = {};
   for (const deal of deals) {
     if (!pipelineByStage[deal.stage]) {
       pipelineByStage[deal.stage] = { count: 0, totalValue: 0, dealIds: [] };
     }
     pipelineByStage[deal.stage].count += 1;
-    pipelineByStage[deal.stage].totalValue += deal.amount;
+    pipelineByStage[deal.stage].totalValue += deal.value;
     pipelineByStage[deal.stage].dealIds.push(deal.id);
   }
 
@@ -44,8 +44,8 @@ router.get('/', (req: Request, res: Response) => {
     .map((d) => ({
       id: d.id,
       name: d.name,
-      accountName: d.accountName,
-      amount: d.amount,
+      accountName: store.getAccountById(d.accountId)?.name || 'Unknown',
+      amount: d.value,
       stage: d.stage,
       healthScore: d.healthScore,
       riskFactors: d.riskFactors,
@@ -68,44 +68,44 @@ router.get('/', (req: Request, res: Response) => {
 
   for (const deal of deals) {
     if (deal.stage === 'closed_won' || deal.stage === 'closed_lost') continue;
-    for (const action of deal.nextActions || []) {
-      if (!action.completed) {
+    for (const action of deal.nextBestActions || []) {
+      if (!action.isCompleted) {
         recommendedActions.push({
           dealId: deal.id,
           dealName: deal.name,
-          accountName: deal.accountName,
+          accountName: store.getAccountById(deal.accountId)?.name || 'Unknown',
           actionId: action.id,
           action: action.description,
           priority: action.priority,
-          dueDate: action.dueDate,
+          dueDate: action.dueDate ? action.dueDate.toISOString() : undefined,
         });
       }
     }
   }
 
   // Sort actions by priority (high > medium > low) then by due date
-  const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   recommendedActions.sort((a, b) => {
-    const pDiff = (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2);
+    const pDiff = (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3);
     if (pDiff !== 0) return pDiff;
     if (a.dueDate && b.dueDate) return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
     return 0;
   });
 
-  // Quota and forecast
+  // Quota and forecast — use getDashboardData() for quota
   const totalPipelineValue = deals
     .filter((d) => d.stage !== 'closed_won' && d.stage !== 'closed_lost')
-    .reduce((sum, d) => sum + d.amount, 0);
+    .reduce((sum, d) => sum + d.value, 0);
 
   const closedWonValue = deals
     .filter((d) => d.stage === 'closed_won')
-    .reduce((sum, d) => sum + d.amount, 0);
+    .reduce((sum, d) => sum + d.value, 0);
 
   const weightedPipeline = deals
     .filter((d) => d.stage !== 'closed_won' && d.stage !== 'closed_lost')
-    .reduce((sum, d) => sum + d.amount * (d.probability / 100), 0);
+    .reduce((sum, d) => sum + d.value * (d.probability / 100), 0);
 
-  const quota = dashboard.quota || 500000;
+  const quota = dashboard.quotaAttainment.quota;
 
   res.json({
     data: {
@@ -128,14 +128,17 @@ router.get('/', (req: Request, res: Response) => {
       pipelineSummary: pipelineByStage,
       dealsAtRisk,
       recommendedActions: recommendedActions.slice(0, 10),
-      recentActivities: recentActivities.map((a) => ({
-        id: a.id,
-        type: a.type,
-        description: a.description,
-        dealId: a.dealId,
-        dealName: a.dealName,
-        timestamp: a.timestamp,
-      })),
+      recentActivities: recentActivities.map((a) => {
+        const deal = store.getDealById(a.dealId);
+        return {
+          id: a.id,
+          type: a.type,
+          description: a.summary,
+          dealId: a.dealId,
+          dealName: deal?.name || 'Unknown',
+          timestamp: a.occurredAt,
+        };
+      }),
       notifications: notifications.map((n) => ({
         id: n.id,
         type: n.type,

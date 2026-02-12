@@ -214,6 +214,8 @@ export interface Activity {
     transcript: string;
     sentiment: number;
   }>;
+  dealName?: string;
+  stakeholderName?: string;
 }
 
 // --- Competitor Intelligence ---
@@ -240,6 +242,9 @@ export interface NextBestAction {
   suggestedDate?: string;
   stakeholderId?: string;
   completed: boolean;
+  dealId?: string;
+  dealName?: string;
+  accountName?: string;
 }
 
 // --- MEDDIC ---

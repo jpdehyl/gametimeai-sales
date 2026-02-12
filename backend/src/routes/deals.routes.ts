@@ -36,7 +36,7 @@ router.get('/', (req: Request, res: Response) => {
     deals = deals.filter(
       (d) =>
         d.name.toLowerCase().includes(search) ||
-        d.accountName.toLowerCase().includes(search)
+        (store.getAccountById(d.accountId)?.name || 'Unknown').toLowerCase().includes(search)
     );
   }
 
@@ -45,7 +45,7 @@ router.get('/', (req: Request, res: Response) => {
     let cmp = 0;
     switch (sortBy) {
       case 'amount':
-        cmp = a.amount - b.amount;
+        cmp = a.value - b.value;
         break;
       case 'healthScore':
         cmp = a.healthScore - b.healthScore;
@@ -66,22 +66,44 @@ router.get('/', (req: Request, res: Response) => {
   const paginatedDeals = deals.slice(start, start + pageSize);
 
   res.json({
-    data: paginatedDeals.map((deal) => ({
-      id: deal.id,
-      name: deal.name,
-      accountId: deal.accountId,
-      accountName: deal.accountName,
-      amount: deal.amount,
-      stage: deal.stage,
-      probability: deal.probability,
-      closeDate: deal.closeDate,
-      healthScore: deal.healthScore,
-      riskFactors: deal.riskFactors,
-      ownerName: deal.ownerName,
-      nextActions: (deal.nextActions || []).filter((a) => !a.completed).slice(0, 2),
-      daysInStage: deal.daysInStage,
-      lastActivityDate: deal.lastActivityDate,
-    })),
+    data: paginatedDeals.map((deal) => {
+      // Look up account name and owner name from their respective stores
+      const accountName = store.getAccountById(deal.accountId)?.name || 'Unknown';
+      const ownerName = store.getUserById(deal.ownerId)?.name || 'Unknown';
+
+      // Get the latest activity date for the deal
+      const activities = store.getActivitiesForDeal(deal.id);
+      const lastActivityDate = activities.length > 0
+        ? activities.reduce((latest, act) =>
+            act.occurredAt > latest ? act.occurredAt : latest,
+            activities[0].occurredAt
+          )
+        : null;
+
+      return {
+        id: deal.id,
+        name: deal.name,
+        accountId: deal.accountId,
+        accountName,
+        amount: deal.value,
+        stage: deal.stage,
+        probability: deal.probability,
+        closeDate: deal.closeDate,
+        healthScore: deal.healthScore,
+        riskFactors: deal.riskFactors,
+        ownerName,
+        nextActions: (deal.nextBestActions || [])
+          .filter((a) => !a.isCompleted)
+          .slice(0, 2)
+          .map((a) => ({
+            ...a,
+            completed: a.isCompleted,
+            dueDate: a.dueDate,
+          })),
+        daysInStage: deal.daysInStage,
+        lastActivityDate,
+      };
+    }),
     pagination: {
       page,
       pageSize,
@@ -111,22 +133,73 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
   const stakeholders = store.getStakeholdersForDeal(deal.id);
   const activities = store.getActivitiesForDeal(deal.id);
 
+  // Look up account name and owner name
+  const accountName = account?.name || 'Unknown';
+  const ownerName = store.getUserById(deal.ownerId)?.name || 'Unknown';
+
+  // Get the latest activity date for the deal
+  const lastActivityDate = activities.length > 0
+    ? activities.reduce((latest, act) =>
+        act.occurredAt > latest ? act.occurredAt : latest,
+        activities[0].occurredAt
+      )
+    : null;
+
+  // Derive engagement level from contact frequency
+  const deriveEngagementLevel = (contactFrequency: string): string => {
+    switch (contactFrequency) {
+      case 'weekly':
+        return 'high';
+      case 'biweekly':
+        return 'medium-high';
+      case 'monthly':
+        return 'medium';
+      case 'quarterly':
+        return 'low';
+      case 'never':
+        return 'none';
+      default:
+        return 'unknown';
+    }
+  };
+
+  // Build competitive intel from competitors array
+  const competitiveIntel = {
+    competitors: deal.competitors.map((c) => ({
+      name: c.competitorName,
+      threatLevel: c.threatLevel,
+      strengths: c.strengths,
+      weaknesses: c.weaknesses,
+      keyDifferentiators: c.keyDifferentiators,
+      objectionHandlers: c.objectionHandlers,
+      incumbentProduct: c.incumbentProduct,
+      relationshipStrength: c.relationshipStrength,
+      lastMentionedAt: c.lastMentionedAt,
+      mentionedBy: c.mentionedBy,
+    })),
+    ourStrengths: deal.competitors.flatMap((c) => c.ourAdvantages),
+    ourWeaknesses: deal.competitors.flatMap((c) => c.weaknesses),
+    landmines: deal.competitors
+      .filter((c) => c.threatLevel === 'high')
+      .map((c) => `${c.competitorName}: ${c.strengths[0] || 'Active threat'}`),
+  };
+
   res.json({
     data: {
       deal: {
         id: deal.id,
         name: deal.name,
         accountId: deal.accountId,
-        accountName: deal.accountName,
-        amount: deal.amount,
+        accountName,
+        amount: deal.value,
         stage: deal.stage,
         probability: deal.probability,
         closeDate: deal.closeDate,
         healthScore: deal.healthScore,
         riskFactors: deal.riskFactors,
-        ownerName: deal.ownerName,
+        ownerName,
         daysInStage: deal.daysInStage,
-        lastActivityDate: deal.lastActivityDate,
+        lastActivityDate,
         createdAt: deal.createdAt,
         updatedAt: deal.updatedAt,
       },
@@ -136,7 +209,7 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
             name: account.name,
             industry: account.industry,
             employeeCount: account.employeeCount,
-            annualRevenue: account.annualRevenue,
+            annualRevenue: account.estimatedRevenue,
             website: account.website,
             healthScore: account.healthScore,
           }
@@ -145,39 +218,33 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
         id: s.id,
         name: s.name,
         title: s.title,
-        role: s.role,
+        role: s.roles[0] || null,
         email: s.email,
         phone: s.phone,
         sentiment: s.sentiment,
-        engagementLevel: s.engagementLevel,
-        lastContactDate: s.lastContactDate,
+        engagementLevel: deriveEngagementLevel(s.contactFrequency),
+        lastContactDate: s.lastContactedAt,
         influenceLevel: s.influenceLevel,
       })),
       activities: activities.map((a) => ({
         id: a.id,
         type: a.type,
-        description: a.description,
+        description: a.summary,
         dealId: a.dealId,
-        dealName: a.dealName,
-        stakeholderName: a.stakeholderName,
-        timestamp: a.timestamp,
+        dealName: deal.name,
+        stakeholderName: a.stakeholderId
+          ? store.getStakeholderById(a.stakeholderId)?.name || 'Unknown'
+          : null,
+        timestamp: a.occurredAt,
         outcome: a.outcome,
       })),
-      competitiveIntel: deal.competitiveIntel || {
-        competitors: [],
-        ourStrengths: [],
-        ourWeaknesses: [],
-        landmines: [],
-      },
-      meddic: deal.meddic || {
-        metrics: null,
-        economicBuyer: null,
-        decisionCriteria: null,
-        decisionProcess: null,
-        identifyPain: null,
-        champion: null,
-      },
-      nextActions: deal.nextActions || [],
+      competitiveIntel,
+      meddic: deal.meddic,
+      nextActions: deal.nextBestActions.map((a) => ({
+        ...a,
+        completed: a.isCompleted,
+        dueDate: a.dueDate,
+      })),
     },
   });
 });
@@ -199,7 +266,7 @@ router.post(
       });
     }
 
-    const actions = deal.nextActions || [];
+    const actions = deal.nextBestActions;
     const action = actions.find((a) => a.id === req.params.actionId);
 
     if (!action) {
@@ -210,9 +277,9 @@ router.post(
       });
     }
 
-    action.completed = true;
-    action.completedAt = new Date().toISOString();
-    deal.updatedAt = new Date().toISOString();
+    action.isCompleted = true;
+    action.completedAt = new Date();
+    deal.updatedAt = new Date();
 
     res.json({
       data: {
@@ -220,7 +287,7 @@ router.post(
         actionId: action.id,
         completed: true,
         completedAt: action.completedAt,
-        remainingActions: actions.filter((a) => !a.completed).length,
+        remainingActions: actions.filter((a) => !a.isCompleted).length,
       },
     });
   }
@@ -254,7 +321,7 @@ router.post('/:id/stage', (req: Request<{ id: string }>, res: Response) => {
   const validStages = [
     'discovery',
     'qualification',
-    'demo',
+    'technical_evaluation',
     'proposal',
     'negotiation',
     'closed_won',
@@ -272,13 +339,13 @@ router.post('/:id/stage', (req: Request<{ id: string }>, res: Response) => {
   const previousStage = deal.stage;
   deal.stage = stage;
   deal.daysInStage = 0;
-  deal.updatedAt = new Date().toISOString();
+  deal.updatedAt = new Date();
 
   // Update probability based on stage
   const stageProbability: Record<string, number> = {
     discovery: 10,
     qualification: 25,
-    demo: 40,
+    technical_evaluation: 40,
     proposal: 60,
     negotiation: 80,
     closed_won: 100,

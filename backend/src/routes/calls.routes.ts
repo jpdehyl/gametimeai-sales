@@ -13,6 +13,16 @@ import { logger } from '../utils/logger';
 const router = Router();
 
 /**
+ * Map a numeric sentiment (-1 to 1) to a human-readable label.
+ */
+function sentimentLabel(score: number | undefined): 'positive' | 'neutral' | 'negative' {
+  if (score === undefined) return 'neutral';
+  if (score > 0.25) return 'positive';
+  if (score < -0.25) return 'negative';
+  return 'neutral';
+}
+
+/**
  * GET /api/v1/calls
  * List recent calls with deal and account context.
  * Supports filtering by dealId or accountId.
@@ -22,7 +32,10 @@ router.get('/', (req: Request, res: Response) => {
   const dealId = req.query.dealId as string;
   const accountId = req.query.accountId as string;
 
-  let calls = store.getRecentCalls(limit);
+  // Calls are Activity objects with type === 'call'
+  let calls = store
+    .getRecentActivities(limit * 3) // over-fetch to have enough after filtering
+    .filter((a) => a.type === 'call');
 
   // Filter by dealId if provided
   if (dealId) {
@@ -34,26 +47,28 @@ router.get('/', (req: Request, res: Response) => {
     calls = calls.filter((c) => c.accountId === accountId);
   }
 
+  // Apply the requested limit
+  calls = calls.slice(0, limit);
+
   res.json({
     data: calls.map((call) => {
       const deal = call.dealId ? store.getDealById(call.dealId) : undefined;
       const account = call.accountId ? store.getAccountById(call.accountId) : undefined;
+      const stakeholder = call.stakeholderId ? store.getStakeholderById(call.stakeholderId) : undefined;
+
       return {
         id: call.id,
         dealId: call.dealId,
-        dealName: deal?.name || call.dealName || 'Unknown',
-        accountId: call.accountId,
-        accountName: account?.name || call.accountName || 'Unknown',
-        stakeholderName: call.stakeholderName,
+        dealName: deal?.name || 'Unknown',
+        accountName: account?.name || 'Unknown',
+        stakeholderName: stakeholder?.name || 'Unknown',
         duration: call.duration,
         direction: call.direction,
-        outcome: call.outcome,
+        sentiment: sentimentLabel(call.sentiment),
         summary: call.summary,
-        sentimentScore: call.sentimentScore,
-        analysisStatus: call.analysisStatus,
-        callDate: call.callDate,
-        actionItems: call.actionItems?.length || 0,
-        coachingTips: call.coachingTips?.length || 0,
+        callDate: call.occurredAt,
+        actionItemCount: call.actionItems?.length || 0,
+        coachingTipCount: 0, // PoC — coaching tips not yet implemented
       };
     }),
   });
@@ -65,9 +80,9 @@ router.get('/', (req: Request, res: Response) => {
  * coaching tips, and deal/account context.
  */
 router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
-  const call = store.calls.get(req.params.id);
+  const call = store.activities.get(req.params.id);
 
-  if (!call) {
+  if (!call || call.type !== 'call') {
     return res.status(404).json({
       error: 'NOT_FOUND',
       message: `Call ${req.params.id} not found`,
@@ -77,17 +92,35 @@ router.get('/:id', (req: Request<{ id: string }>, res: Response) => {
 
   const deal = call.dealId ? store.getDealById(call.dealId) : undefined;
   const account = call.accountId ? store.getAccountById(call.accountId) : undefined;
+  const stakeholder = call.stakeholderId ? store.getStakeholderById(call.stakeholderId) : undefined;
 
   res.json({
     data: {
-      ...call,
+      id: call.id,
+      dealId: call.dealId,
+      accountId: call.accountId,
+      stakeholderId: call.stakeholderId,
+      stakeholderName: stakeholder?.name || 'Unknown',
+      direction: call.direction,
+      subject: call.subject,
+      summary: call.summary,
+      sentiment: sentimentLabel(call.sentiment),
+      sentimentScore: call.sentiment,
+      keyInsights: call.keyInsights,
+      actionItems: call.actionItems,
+      buyingSignals: call.buyingSignals,
+      competitorsMentioned: call.competitorsMentioned,
+      duration: call.duration,
+      outcome: call.outcome,
+      talkRatio: call.talkRatio,
+      callDate: call.occurredAt,
       deal: deal
         ? {
             id: deal.id,
             name: deal.name,
-            accountName: deal.accountName,
+            accountName: account?.name || 'Unknown',
             stage: deal.stage,
-            amount: deal.amount,
+            value: deal.value,
             healthScore: deal.healthScore,
           }
         : null,
